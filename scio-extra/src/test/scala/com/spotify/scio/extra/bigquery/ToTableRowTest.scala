@@ -23,6 +23,7 @@ import com.google.protobuf.ByteString
 import com.spotify.scio.bigquery.TableRow
 import org.apache.avro.generic.GenericData
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.io.BaseEncoding
+import org.joda.time.{DateTime, LocalDate, LocalTime}
 import org.scalatest.{FlatSpec, Matchers}
 
 import scala.collection.JavaConverters._
@@ -91,5 +92,45 @@ class ToTableRowTest extends FlatSpec with Matchers with ToTableRow {
     genericRecord.put("fixedField", new fixedType("1234567890123456".getBytes()))
 
     toTableRow(genericRecord) shouldEqual expectedOutput
+  }
+
+  val date = LocalDate.now()
+  val timeMillis: LocalTime = LocalTime.now()
+  val timeMicros = 1234L
+  val timestampMillis: DateTime = DateTime.now()
+  val timestampMicros = 4325L
+
+  val expectedLogicalTypeOutput = new TableRow()
+    .set("booleanField", true)
+    .set("intField", 1)
+    .set("stringField", "someString")
+    .set("longField", 1L)
+    .set("doubleField", 1.0)
+    .set("floatField", 1f)
+    .set("bytesField", BaseEncoding.base64Url().encode("someBytes".getBytes))
+    .set("dateField", date)
+    .set("timeMillisField", timeMillis)
+    .set("timeMicrosField", timeMicros)
+    .set("timestampMillisField", timestampMillis)
+    .set("timestampMicrosField", timestampMicros)
+
+  "ToTableRowWithLogicalType" should "convert a SpecificRecord with Logical Types to TableRow" in {
+    val specificRecord = AvroExampleWithLogicalType
+      .newBuilder()
+      .setBooleanField(true)
+      .setStringField("someString")
+      .setDoubleField(1.0)
+      .setLongField(1L)
+      .setIntField(1)
+      .setFloatField(1f)
+      .setBytesField(ByteBuffer.wrap(ByteString.copyFromUtf8("someBytes").toByteArray))
+      .setDateField(date)
+      .setTimeMillisField(timeMillis)
+      .setTimeMicrosField(timeMicros)
+      .setTimestampMillisField(timestampMillis)
+      .setTimestampMicrosField(timestampMicros)
+      .build()
+
+    toTableRow(specificRecord) shouldEqual expectedLogicalTypeOutput
   }
 }

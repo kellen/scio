@@ -3,15 +3,18 @@ package fix
 import com.spotify.scio.values.SCollection
 
 object FixJoinNames {
-
-  def changeJoinNames(lhs: SCollection[(Int, String)], rhs: SCollection[(Int, String)]
+  def changeJoinNames(
+    lhs: SCollection[(Int, String)],
+    rhs: SCollection[(Int, String)]
   ): SCollection[(Int, (String, Option[String]))] = {
     lhs.hashLeftOuterJoin(rhs)
     lhs.sparseFullOuterJoin(rhs, 3)
     lhs.skewedLeftOuterJoin(rhs)
   }
 
-  def changeNamesAndArgs(lhs: SCollection[(Int, String)], rightHS: SCollection[(Int, String)]
+  def changeNamesAndArgs(
+    lhs: SCollection[(Int, String)],
+    rightHS: SCollection[(Int, String)]
   ): SCollection[(Int, (String, Option[String]))] = {
     lhs.hashLeftOuterJoin(rhs = rightHS)
     lhs.sparseFullOuterJoin(rhs = rightHS, 3)
@@ -19,8 +22,7 @@ object FixJoinNames {
     lhs.skewedLeftOuterJoin(rhs = rightHS)
   }
 
-  def changeArgs(lhs: SCollection[(Int, String)], rightHS: SCollection[(Int, String)]
-  ): Unit = {
+  def changeArgs(lhs: SCollection[(Int, String)], rightHS: SCollection[(Int, String)]): Unit = {
     lhs.join(rhs = rightHS)
     lhs.fullOuterJoin(rhs = rightHS)
     lhs.leftOuterJoin(rhs = rightHS)
@@ -48,18 +50,16 @@ object FixJoinNames {
   }
 
   def example(lhs: SCollection[(Int, String)], right: SCollection[String]): Unit = {
-    def hashLeftJoin(lhs: SCollection[(Int, String)]
-    ): SCollection[(Int, (String, Option[String]))]  =  {
+    def hashLeftJoin(
+      lhs: SCollection[(Int, String)]
+    ): SCollection[(Int, (String, Option[String]))] =
       lhs.hashLeftOuterJoin(rhs = right.map(a => (a.length, a)))
-    }
 
-    def sparseOuterJoin(a: String): Int = {
+    def sparseOuterJoin(a: String): Int =
       a.length
-    }
 
-    def skewedLeftJoin(that: String): Int = {
+    def skewedLeftJoin(that: String): Int =
       that.length
-    }
 
     hashLeftJoin(lhs)
     sparseOuterJoin("test")

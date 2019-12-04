@@ -6,7 +6,6 @@ import com.spotify.scio.testing.PipelineSpec
 import org.apache.beam.sdk.PipelineResult.State
 
 class ValidateInvoicePaymentsJobTest extends PipelineSpec {
-
   def doSomething(s: ScioResult): Unit = ()
   def doSomethingElse(s: ScioResult, x: String): Unit = ()
   def doSomethingWithAString(s: String): Unit = ()

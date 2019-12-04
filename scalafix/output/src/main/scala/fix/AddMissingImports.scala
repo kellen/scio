@@ -8,8 +8,7 @@ import com.spotify.scio.values.SCollection
 import com.spotify.scio.avro._
 
 object AddMissingImports {
-
-  def computeAndSaveDay[M <: Message : ClassTag](sc: ScioContext): Unit = {
+  def computeAndSaveDay[M <: Message: ClassTag](sc: ScioContext): Unit = {
     sc.protobufFile[M]("input")
       .saveAsProtobufFile("output")
 

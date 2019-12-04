@@ -1,6 +1,6 @@
 /*
 rule = RewriteSysProp
-*/
+ */
 
 package fix
 package v0_7_0

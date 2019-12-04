@@ -15,11 +15,12 @@ class SpecializedScioIO extends ScioIO[(String, Int)] {
   override type WriteP = Nothing
   override val tapT: TapT[(String, Int)] = TapOf[(String, Int)]
 
-  override def read(sc: ScioContext,
-                    endpoint: String): SCollection[(String, Int)] = ???
+  override def read(sc: ScioContext, endpoint: String): SCollection[(String, Int)] = ???
 
-  override protected def write(data: SCollection[(String, Int)],
-                               params: WriteP): Future[Tap[tapT.T]] =
+  override protected def write(
+    data: SCollection[(String, Int)],
+    params: WriteP
+  ): Future[Tap[tapT.T]] =
     throw new IllegalStateException("🤡")
 
   override def tap(params: ReadP): Tap[tapT.T] = ???
@@ -33,8 +34,7 @@ class OtherScioIO extends ScioIO[Integer] {
   override def read(sc: ScioContext, endpoint: String): SCollection[Integer] =
     ???
 
-  override def write(data: SCollection[Integer],
-                     params: WriteP): Future[Tap[tapT.T]] =
+  override def write(data: SCollection[Integer], params: WriteP): Future[Tap[tapT.T]] =
     throw new IllegalStateException("🤡")
 
   override def tap(params: ReadP): Tap[tapT.T] = ???

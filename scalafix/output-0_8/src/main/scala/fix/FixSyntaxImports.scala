@@ -10,7 +10,9 @@ object Ops {
   import java.util.Date
   import com.spotify.scio.jdbc.{CloudSqlOptions, JdbcConnectionOptions, JdbcReadOptions}
 
-  def apply(date: Date, sc: JdbcScioContextOps, cloudSqlOptions: CloudSqlOptions) = ()
+  def apply(date: Date,
+            sc: JdbcScioContextOps,
+            cloudSqlOptions: CloudSqlOptions) = ()
 
   def handleResponse(name: String, value: BaseAsyncLookupDoFn.Try[String]): Unit = ???
 }

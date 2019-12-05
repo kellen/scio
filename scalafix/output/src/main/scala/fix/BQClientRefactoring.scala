@@ -37,8 +37,7 @@ object BQClientRefactoring {
   bq.extract.asJson(table, List())
   bq.extract.asAvro(table, List())
 
-  val tableRefFromCsv =
-    bq.load.csv(sources, table, skipLeadingRows = 1, schema = Some(schema)).get
+  val tableRefFromCsv = bq.load.csv(sources, table, skipLeadingRows = 1, schema = Some(schema)).get
   bq.load.json(sources, table, schema = Some(schema)).get
   bq.load.avro(sources, table).get
   bq.tables.table(tableRefFromCsv)

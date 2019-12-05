@@ -40,8 +40,7 @@ object BQClientRefactoring {
   bq.exportTableAsJson(table, List())
   bq.exportTableAsAvro(table, List())
 
-  val tableRefFromCsv =
-    bq.loadTableFromCsv(sources, table, skipLeadingRows = 1, schema = Some(schema))
+  val tableRefFromCsv = bq.loadTableFromCsv(sources, table, skipLeadingRows = 1, schema = Some(schema))
   bq.loadTableFromJson(sources, table, schema = Some(schema))
   bq.loadTableFromAvro(sources, table)
   bq.getTable(tableRefFromCsv)

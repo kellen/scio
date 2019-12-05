@@ -8,11 +8,11 @@ import com.spotify.scio.transforms.BaseAsyncLookupDoFn
 
 object Ops {
   import java.util.Date
-  // format: off
   import com.spotify.scio.jdbc.{CloudSqlOptions, JdbcConnectionOptions, JdbcReadOptions}
-  // format: on
 
-  def apply(date: Date, sc: JdbcScioContextOps, cloudSqlOptions: CloudSqlOptions) = ()
+  def apply(date: Date,
+            sc: JdbcScioContextOps,
+            cloudSqlOptions: CloudSqlOptions) = ()
 
   def handleResponse(name: String, value: BaseAsyncLookupDoFn.Try[String]): Unit = ???
 }

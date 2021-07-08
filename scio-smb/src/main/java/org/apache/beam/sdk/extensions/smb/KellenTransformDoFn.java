@@ -361,7 +361,7 @@ public class KellenTransformDoFn {
       while(iter.hasNext()) {
         try {
           KV<FinalKeyT, CoGbkResult> mergedKeyGroup = iter.next();
-          outputTransform(mergedKeyGroup, context, outputCollector);
+          outputTransform(mergedKeyGroup, context, outputCollector, window);
 
           // exhaust iterators if necessary before moving on to the next key group:
           // for example, if not every element was needed in the transformFn

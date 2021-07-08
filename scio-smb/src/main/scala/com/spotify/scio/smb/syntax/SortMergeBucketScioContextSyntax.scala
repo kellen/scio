@@ -22,10 +22,9 @@ import com.spotify.scio.annotations.experimental
 import com.spotify.scio.coders.Coder
 import com.spotify.scio.io.{ClosedTap, EmptyTap}
 import com.spotify.scio.values._
-import org.apache.beam.sdk.extensions.smb.{KellenBucketItem, KellenBucketTransform, SortedBucketIO, SortedBucketTransform, TargetParallelism}
+import org.apache.beam.sdk.extensions.smb.{SortedBucketIO, SortedBucketTransform, TargetParallelism}
 import org.apache.beam.sdk.transforms.DoFn.ProcessElement
 import org.apache.beam.sdk.transforms.join.CoGbkResult
-import org.apache.beam.sdk.transforms.windowing.BoundedWindow
 import org.apache.beam.sdk.transforms.{DoFn, ParDo}
 import org.apache.beam.sdk.values.KV
 
@@ -468,64 +467,8 @@ final class SortedBucketScioContext(@transient private val self: ScioContext) ex
 
     def to[W: Coder](
       output: SortedBucketIO.TransformOutput[K, W]
-    ): SortMergeTransformIntermediateBuilder[K, R, W] =
-      new SortMergeTransformIntermediateBuilder(coGbk.transform(output), toR)
-  }
-
-  class SortMergeTransformIntermediateBuilder[K, R, W](
-    transform: SortedBucketIO.CoGbkTransform[K, W],
-    toR: CoGbkResult => R
-  ) extends Serializable {
-    def withSideInputs(sides: SideInput[_]*): SortMergeTransformWithSideInputWriteBuilder[K, R, W] =
-      new SortMergeTransformWithSideInputWriteBuilder(transform, toR, sides:_*)
-
-    def via(transformFn: (K, R, SortedBucketTransform.SerializableConsumer[W]) => Unit): ClosedTap[Nothing] = {
-      new SortMergeTransformWriteBuilder(transform, toR).via(transformFn)
-    }
-  }
-
-  class SortMergeTransformWithSideInputWriteBuilder[K, R, W](
-    transform: SortedBucketIO.CoGbkTransform[K, W],
-    toR: CoGbkResult => R,
-    sides: SideInput[_]*
-  ) extends Serializable {
-    /**
-     * Defines the transforming function applied to each key group, where the output(s) are sent to
-     * the provided consumer via its `accept` function.
-     *
-     * The key group is defined as a key K and records R, where R represents the unpacked [[CoGbkResult]]
-     * converted to Scala Iterables. Note that, unless a [[org.apache.beam.sdk.extensions.smb.SortedBucketSource.Predicate]]
-     * is provided to the PTransform, the Scala Iterable is backed by a lazy iterator, and will only
-     * materialize if .toList or similar function is used in the transformFn. If you have extremely
-     * large key groups, take care to only materialize as much of the Iterable as is needed.
-     */
-    def via(
-      // FIXME SideInputContext[_] is wrong; should be .e.g [(K, R)] or something???
-      transformFn: (K, R, SideInputContext[_], SortedBucketTransform.SerializableConsumer[W]) => Unit
-    ): ClosedTap[Nothing] = {
-      val fn = new KellenBucketTransform.TransformFnWithSideInputContext[K, W]() {
-        override def writeTransform(
-          keyGroup: KV[K, CoGbkResult],
-          c: DoFn[KellenBucketItem, KellenBucketTransform.MergedBucket]#ProcessContext,
-          outputConsumer: SortedBucketTransform.SerializableConsumer[W],
-          window: BoundedWindow
-        ): Unit = {
-          val siCtx = new SideInputContext(c.asInstanceOf[DoFn[KellenBucketItem, AnyRef]#ProcessContext], window)
-          // TODO how to get sides from context
-          transformFn.apply(
-            keyGroup.getKey,
-            toR(keyGroup.getValue),
-            siCtx,
-            outputConsumer
-          )
-        }
-      }
-
-      val t = transform.via(fn)
-
-      self.applyInternal(t)
-      ClosedTap[Nothing](EmptyTap)
-    }
+    ): SortMergeTransformWriteBuilder[K, R, W] =
+      new SortMergeTransformWriteBuilder(coGbk.transform(output), toR)
   }
 
   class SortMergeTransformWriteBuilder[K, R, W](

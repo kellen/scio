@@ -4,19 +4,20 @@ import java.io.IOException;
 import java.util.NoSuchElementException;
 import javax.annotation.Nullable;
 import org.apache.beam.sdk.io.BoundedSource;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Optional;
 
-public class KellenBucketReader extends BoundedSource.BoundedReader<Integer> {
-  private final BoundedSource<Integer> currentSource;
-  private int index;
-  @Nullable private Optional<Integer> next;
+public class KellenBucketReader extends BoundedSource.BoundedReader<KellenBucketItem> {
+  private final BoundedSource<KellenBucketItem> currentSource;
+  private boolean started;
+  // there is only ever a single item in this source
+  @Nullable private KellenBucketItem next;
 
   public KellenBucketReader(
-      BoundedSource<Integer> initialSource,
-      int bucketId, int targetParallelism
+      BoundedSource<KellenBucketItem> initialSource,
+      int bucketOffsetId, int effectiveParallelism
   ) {
     this.currentSource = initialSource;
-    this.index = -1;
+    this.started = false;
+    this.next = new KellenBucketItem(bucketOffsetId, effectiveParallelism);
   }
 
   @Override
@@ -26,25 +27,28 @@ public class KellenBucketReader extends BoundedSource.BoundedReader<Integer> {
 
   @Override
   public boolean advance() throws IOException {
-
-    return false;
+    if(!started && next != null) {
+      started = true;
+      return true;
+    } else {
+      next = null;
+      return false;
+    }
   }
 
   @Override
-  public Integer getCurrent() throws NoSuchElementException {
-    if (next == null) {
+  public KellenBucketItem getCurrent() throws NoSuchElementException {
+    if (!started || next == null) {
       throw new NoSuchElementException();
     }
-    return next.orNull();
+    return next;
   }
 
   @Override
-  public void close() throws IOException {
-
-  }
+  public void close() throws IOException {}
 
   @Override
-  public BoundedSource<Integer> getCurrentSource() {
+  public BoundedSource<KellenBucketItem> getCurrentSource() {
     return currentSource;
   }
 }

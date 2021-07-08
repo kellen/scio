@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
  * Source of integers up to numBuckets
  * but returning the estimated size in bytes
  */
-public class KellenBucketSource<FinalKeyT> extends BoundedSource<Integer> {
+public class KellenBucketSource<FinalKeyT> extends BoundedSource<KellenBucketItem> {
   // Dataflow calls split() with a suggested byte size that assumes a higher throughput than
   // SMB joins have. By adjusting this suggestion we can arrive at a more optimal parallelism.
   static final Double DESIRED_SIZE_BYTES_ADJUSTMENT_FACTOR = 0.33;
@@ -42,24 +42,23 @@ public class KellenBucketSource<FinalKeyT> extends BoundedSource<Integer> {
       TargetParallelism targetParallelism,
       int effectiveParallelism,
       int bucketOffsetId,
-      SourceSpec<FinalKeyT> sourceSpec
+      SourceSpec<FinalKeyT> sourceSpec,
+      long estimatedSizeBytes
       ) {
-    // TODO
     this.sources = sources;
     this.targetParallelism = targetParallelism;
     this.effectiveParallelism = effectiveParallelism;
     this.bucketOffsetId = bucketOffsetId;
     this.sourceSpec = sourceSpec;
+    this.estimatedSizeBytes = estimatedSizeBytes;
   }
 
   public KellenBucketSource<FinalKeyT> split(int bucketOffsetId, int adjustedParallelism, long estimatedSizeBytes) {
-    return new KellenBucketSource<>(
-// TODO
-    );
+    return new KellenBucketSource<>(sources, targetParallelism, adjustedParallelism, bucketOffsetId, sourceSpec, estimatedSizeBytes);
   }
 
   @Override
-  public List<? extends BoundedSource<Integer>> split(
+  public List<? extends BoundedSource<KellenBucketItem>> split(
       final long desiredBundleSizeBytes,
       final PipelineOptions options) throws Exception {
 
@@ -92,8 +91,8 @@ public class KellenBucketSource<FinalKeyT> extends BoundedSource<Integer> {
   }
 
   @Override
-  public Coder<Integer> getOutputCoder() {
-    return NullableCoder.of(VarIntCoder.of());
+  public Coder<KellenBucketItem> getOutputCoder() {
+    return NullableCoder.of(SerializableCoder.of(KellenBucketItem.class));
   }
 
   @Override
@@ -112,7 +111,7 @@ public class KellenBucketSource<FinalKeyT> extends BoundedSource<Integer> {
   }
 
   @Override
-  public BoundedReader<Integer> createReader(final PipelineOptions options) throws IOException {
-    return new KellenBucketReader(this);
+  public BoundedReader<KellenBucketItem> createReader(final PipelineOptions options) throws IOException {
+    return new KellenBucketReader(this, bucketOffsetId, effectiveParallelism);
   }
 }

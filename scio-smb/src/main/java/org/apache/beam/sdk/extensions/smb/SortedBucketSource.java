@@ -314,6 +314,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
         true);
   }
 
+  // TODO refactor this so that the common functionality is shared rather than embedded in a static class
   /** Merge key-value groups in matching buckets. */
   static class MergeBucketsReader<FinalKeyT> extends BoundedReader<KV<FinalKeyT, CoGbkResult>> {
     private static final Comparator<Map.Entry<TupleTag, KV<byte[], Iterator<?>>>> keyComparator =
@@ -392,36 +393,46 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
     @Override
     public boolean advance() throws IOException {
       while (true) {
-        if (runningKeyGroupSize != 0) { // If it's 0, that means we haven't started reading
+        // once a keygroup has been fully read, update the distribution metrics
+        // if runningKeyGroupSize is 0, we haven't started reading yet
+        if (runningKeyGroupSize != 0) {
           keyGroupSize.update(runningKeyGroupSize);
           runningKeyGroupSize = 0;
         }
 
-        int completedSources = 0;
         // Advance key-value groups from each source
+        // for each source, add its tupleTag and data iterator to nextKeyGroups
+        // _if_ that tupleTag hasn't already been added _and_ there's data in the iterator
+        int completedSources = 0;
         for (int i = 0; i < numSources; i++) {
-          final KeyGroupIterator it = iterators[i];
+          // if the tupletag is already recorded, skip this source
           if (nextKeyGroups.containsKey(tupleTags.get(i))) {
             continue;
           }
+          // get the associated iterator
+          final KeyGroupIterator it = iterators[i];
           if (it.hasNext()) {
+            // if there's a key group in the  iterator, put it in nextKeyGroups for processing
             final KV<byte[], Iterator<?>> next = it.next();
             nextKeyGroups.put(tupleTags.get(i), next);
           } else {
+            // otherwise this source is exhausted, so update the counter
             completedSources++;
           }
         }
 
+        // if there's nothing in nextKeyGroups, we're all done and will return false
         if (nextKeyGroups.isEmpty()) {
           break;
         }
 
         // Find next key-value groups
-        final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> minKeyEntry =
-            nextKeyGroups.entrySet().stream().min(keyComparator).orElse(null);
+        // gets the "first" key
+        // TODO: why? cuz it's the first in the input files?
+        final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> minKeyEntry = nextKeyGroups.entrySet().stream().min(keyComparator).orElse(null);
 
-        final Iterator<Map.Entry<TupleTag, KV<byte[], Iterator<?>>>> nextKeyGroupsIt =
-            nextKeyGroups.entrySet().iterator();
+        // TODO what is `valueMap` for?
+        // TODO why use resultSchema here? should be == numSources??
         final List<Iterable<?>> valueMap = new ArrayList<>();
         for (int i = 0; i < resultSchema.size(); i++) {
           valueMap.add(new ArrayList<>());
@@ -430,12 +441,22 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
         // Set to 1 if subsequent key groups should be accepted or 0 if they should be filtered out
         int acceptKeyGroup = -1;
 
+        // for each entry in the key groups
+        final Iterator<Map.Entry<TupleTag, KV<byte[], Iterator<?>>>> nextKeyGroupsIt = nextKeyGroups.entrySet().iterator();
         while (nextKeyGroupsIt.hasNext()) {
           final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> entry = nextKeyGroupsIt.next();
 
+          // if this entry is for the current-min key
           if (keyComparator.compare(entry, minKeyEntry) == 0) {
             final TupleTag tupleTag = entry.getKey();
             int index = resultSchema.getIndex(tupleTag);
+
+            // on each iteration, acceptKeyGroup may already be set.
+            // if it's set to -1 (the initial value),
+            //    and the key matches the filter, we emit this key group
+            //    and the # of buckets for this source >= parallelism, we emit this key group
+            // if it's set to 1 from a previous iteration, we emit this key group
+            // if it's set to 0 from a previous iteration, we don't emit, but exhaust the iterator later
 
             // Track the canonical # buckets of each source that the key is found in.
             // If we find it in a source with a # buckets >= the parallelism of the job,
@@ -448,14 +469,13 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
 
             // If the user supplies a predicate, we have to materialize the iterable to apply it
             boolean materialize = (materializeKeyGroup || predicates[index] != null);
-
-            final Predicate<Object> predicate =
-                predicates[index] != null ? predicates[index] : (xs, x) -> true;
-
-            final Iterator<Object> keyGroupIterator =
-                (Iterator<Object>) entry.getValue().getValue();
+            // define a default no-op predicate when unsupplied
+            final Predicate<Object> predicate = predicates[index] != null ? predicates[index] : (xs, x) -> true;
+            // get the data iterator for this key group
+            final Iterator<Object> keyGroupIterator = (Iterator<Object>) entry.getValue().getValue();
 
             if (emitKeyGroup && !materialize) {
+              // don't eagerly materialize this iterator
               valueMap.set(
                   index,
                   new TraversableOnceIterable<>(
@@ -467,6 +487,8 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
                           })));
               acceptKeyGroup = 1;
             } else if (emitKeyGroup) {
+              // eagerly materialize this iterator into `List<Object>`
+              // by applying the predicate to each value
               final List<Object> values = (List<Object>) valueMap.get(index);
               keyGroupIterator.forEachRemaining(
                   v -> {
@@ -493,6 +515,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
                   CoGbkResultUtil.newCoGbkResult(resultSchema, valueMap));
           return true;
         } else {
+          //  we have consumed all sources, so cannot advance more. break & return false
           if (completedSources == numSources) {
             break;
           }
@@ -545,7 +568,8 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
     private String filenameSuffix;
     private FileOperations<V> fileOperations;
     private List<ResourceId> inputDirectories;
-    private Predicate<V> predicate;
+    // TODO/FIXME made this public for KellenTransformDoFn
+    public Predicate<V> predicate;
     private transient SourceMetadata<K, V> sourceMetadata;
 
     public BucketedInput(
@@ -603,7 +627,8 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
       return getOrComputeMetadata().getPartitionMetadata();
     }
 
-    private SourceMetadata<K, V> getOrComputeMetadata() {
+    // TODO/FIXME made public
+    public SourceMetadata<K, V> getOrComputeMetadata() {
       if (sourceMetadata == null) {
         sourceMetadata =
             BucketMetadataUtil.get().getSourceMetadata(inputDirectories, filenameSuffix);

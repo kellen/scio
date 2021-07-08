@@ -22,9 +22,10 @@ import com.spotify.scio.annotations.experimental
 import com.spotify.scio.coders.Coder
 import com.spotify.scio.io.{ClosedTap, EmptyTap}
 import com.spotify.scio.values._
-import org.apache.beam.sdk.extensions.smb.{SortedBucketIO, SortedBucketTransform, TargetParallelism}
+import org.apache.beam.sdk.extensions.smb.{KellenBucketItem, KellenBucketTransform, SortedBucketIO, SortedBucketTransform, TargetParallelism}
 import org.apache.beam.sdk.transforms.DoFn.ProcessElement
 import org.apache.beam.sdk.transforms.join.CoGbkResult
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow
 import org.apache.beam.sdk.transforms.{DoFn, ParDo}
 import org.apache.beam.sdk.values.KV
 
@@ -475,8 +476,8 @@ final class SortedBucketScioContext(@transient private val self: ScioContext) ex
     transform: SortedBucketIO.CoGbkTransform[K, W],
     toR: CoGbkResult => R
   ) extends Serializable {
-    def withSideInputs(sides: SideInput[_]*): SortMergeTransformWriteBuilder[K, R, W] =
-      new SortMergeTransformWriteBuilder(transform, toR, sides:_*)
+    def withSideInputs(sides: SideInput[_]*): SortMergeTransformWithSideInputWriteBuilder[K, R, W] =
+      new SortMergeTransformWithSideInputWriteBuilder(transform, toR, sides:_*)
 
     def via(transformFn: (K, R, SortedBucketTransform.SerializableConsumer[W]) => Unit): ClosedTap[Nothing] = {
       new SortMergeTransformWriteBuilder(transform, toR).via(transformFn)
@@ -502,17 +503,22 @@ final class SortedBucketScioContext(@transient private val self: ScioContext) ex
       // FIXME SideInputContext[_] is wrong; should be .e.g [(K, R)] or something???
       transformFn: (K, R, SideInputContext[_], SortedBucketTransform.SerializableConsumer[W]) => Unit
     ): ClosedTap[Nothing] = {
-      val fn = new SortedBucketTransform.TransformFnWithSideInputs[K, W]() {
+      val fn = new KellenBucketTransform.TransformFnWithSideInputContext[K, W]() {
         override def writeTransform(
           keyGroup: KV[K, CoGbkResult],
-          outputConsumer: SortedBucketTransform.SerializableConsumer[W]
-        ): Unit =
+          c: DoFn[KellenBucketItem, KellenBucketTransform.MergedBucket]#ProcessContext,
+          outputConsumer: SortedBucketTransform.SerializableConsumer[W],
+          window: BoundedWindow
+        ): Unit = {
+          val siCtx = new SideInputContext(c.asInstanceOf[DoFn[KellenBucketItem, AnyRef]#ProcessContext], window)
+          // TODO how to get sides from context
           transformFn.apply(
             keyGroup.getKey,
-            sides,
             toR(keyGroup.getValue),
+            siCtx,
             outputConsumer
           )
+        }
       }
 
       val t = transform.via(fn)
@@ -547,7 +553,6 @@ final class SortedBucketScioContext(@transient private val self: ScioContext) ex
         ): Unit =
           transformFn.apply(
             keyGroup.getKey,
-            sides,
             toR(keyGroup.getValue),
             outputConsumer
           )

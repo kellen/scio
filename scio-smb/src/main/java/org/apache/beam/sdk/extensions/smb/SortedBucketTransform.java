@@ -17,13 +17,8 @@
 
 package org.apache.beam.sdk.extensions.smb;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Serializable;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
-import java.nio.charset.Charset;
 import java.text.DecimalFormat;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -31,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -46,7 +42,6 @@ import org.apache.beam.sdk.extensions.smb.SMBFilenamePolicy.FileAssignment;
 import org.apache.beam.sdk.extensions.smb.SortedBucketSink.RenameBuckets;
 import org.apache.beam.sdk.extensions.smb.SortedBucketSink.WriteResult;
 import org.apache.beam.sdk.io.BoundedSource;
-import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.io.fs.ResourceId;
 import org.apache.beam.sdk.metrics.Distribution;
@@ -406,7 +401,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
         throw new RuntimeException(err);
       }
 
-      final MultiSourceKeyGroupIterator<FinalKeyT> iter = new MultiSourceKeyGroupIterator<>(
+      final MultiSourceKeyGroupReader<FinalKeyT> iter = new MultiSourceKeyGroupReader<>(
           sources,
           sourceSpec,
           keyGroupSize,
@@ -415,9 +410,12 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
           effectiveParallelism,
           context.getPipelineOptions()
       );
-      while(iter.hasNext()) {
+      while(true) {
         try {
-          KV<FinalKeyT, CoGbkResult> mergedKeyGroup = iter.next();
+          Optional<KV<FinalKeyT, CoGbkResult>> optMergedKeyGroup = iter.readNext();
+          if(!optMergedKeyGroup.isPresent()) break;
+
+          KV<FinalKeyT, CoGbkResult> mergedKeyGroup = optMergedKeyGroup.get();
           outputTransform(mergedKeyGroup, context, outputCollector, window);
 
           // exhaust iterators if necessary before moving on to the next key group:

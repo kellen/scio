@@ -23,8 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("unchecked")
-public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
-  private static final Logger LOG = LoggerFactory.getLogger(MultiSourceKeyGroupIterator.class);
+public class MultiSourceKeyGroupReader<FinalKeyT> {
+  private static final Logger LOG = LoggerFactory.getLogger(MultiSourceKeyGroupReader.class);
 
   private enum AcceptKeyGroup { ACCEPT, REJECT, UNSET }
   private Optional<KV<FinalKeyT, CoGbkResult>> head = null;
@@ -40,7 +40,9 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
   private final List<BucketedInputSource<?, ?>> bucketedInputs;
   private final Function<byte[], Boolean> keyGroupFilter;
 
-  public MultiSourceKeyGroupIterator(
+  // TODO remvoe
+ final   int bucketId;
+  public MultiSourceKeyGroupReader(
       List<SortedBucketSource.BucketedInput<?, ?>> sources,
        SourceSpec<FinalKeyT> sourceSpec,
        Distribution keyGroupSize,
@@ -49,6 +51,7 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
       int effectiveParallelism,
       PipelineOptions options
   ) {
+    this.bucketId = bucketId;
     this.keyCoder = sourceSpec.keyCoder;
     this.keyGroupSize = keyGroupSize;
     this.materializeKeyGroup = materializeKeyGroup;
@@ -60,22 +63,11 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
             .map(src -> new BucketedInputSource<>(src, bucketId, effectiveParallelism, options))
             .collect(Collectors.toList());
     this.keyGroupFilter = (bytes) -> sources.get(0).getMetadata().rehashBucket(bytes, effectiveParallelism) == bucketId;
-
-    advance();
   }
 
-  @Override
-  public boolean hasNext() {
-    return head.isPresent();
-  }
-
-  @Override
-  public KV<FinalKeyT, CoGbkResult> next() {
-    if(head == null) throw new IllegalStateException("Iterator head not yet initialized.");
-    if(!head.isPresent()) throw new NoSuchElementException();
-    KV<FinalKeyT, CoGbkResult> cur = head.get();
+  public Optional<KV<FinalKeyT, CoGbkResult>> readNext() {
     advance();
-    return cur;
+    return head;
   }
 
   private void advance() {
@@ -85,7 +77,6 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
     while(true) {
       if (runningKeyGroupSize != 0) {
         keyGroupSize.update(runningKeyGroupSize);
-        LOG.error("runningKeyGroupSize: " + runningKeyGroupSize + " in " + keyGroupSize.toString());
         runningKeyGroupSize = 0;
       }
 
@@ -107,10 +98,8 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
       }
 
       // process keys in order, but since not all sources have all keys, find the minimum available key
-      byte[] minKey = activeSources.stream()
-          .map(src ->  src.currentKey())
-          .min(bytesComparator)
-          .orElse(null);
+      final List<byte[]> consideredKeys = activeSources.stream().map(src -> src.currentKey()).collect(Collectors.toList());
+      byte[] minKey = consideredKeys.stream().min(bytesComparator).orElse(null);
       final boolean emitBasedOnMinKeyBucketing = keyGroupFilter.apply(minKey);
 
       // output accumulator

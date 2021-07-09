@@ -84,19 +84,12 @@ public class SortedBucketTransformTest {
           keyGroup
               .getValue()
               .getAll(new TupleTag<String>("lhs"))
-              .forEach(
-                  lhs -> {
-//                    LOG.error("lhs-" + lhs);
-                    keyGroup
+              .forEach(lhs ->
+                      keyGroup
                         .getValue()
                         .getAll(new TupleTag<String>("rhs"))
-                        .forEach(
-                            rhs -> {
-//                              LOG.error("rhs-" + rhs);
-                              LOG.error(lhs + "-" + rhs);
-                              outputConsumer.accept(lhs + "-" + rhs);
-                            });
-                  });
+                        .forEach(rhs -> outputConsumer.accept(lhs + "-" + rhs))
+                  );
 
   @BeforeClass
   public static void writeData() throws Exception {
@@ -143,20 +136,20 @@ public class SortedBucketTransformTest {
                 predicate));
   }
 
-//  @Test
-//  public void testSortedBucketTransformMinParallelism() throws Exception {
-//    test(TargetParallelism.min(), 2);
-//  }
-//
-//  @Test
-//  public void testSortedBucketTransformMaxParallelism() throws Exception {
-//    test(TargetParallelism.max(), 4);
-//  }
-//
-//  @Test
-//  public void testSortedBucketTransformAutoParallelism() throws Exception {
-//    test(TargetParallelism.auto(), -1);
-//  }
+  @Test
+  public void testSortedBucketTransformMinParallelism() throws Exception {
+    test(TargetParallelism.min(), 2);
+  }
+
+  @Test
+  public void testSortedBucketTransformMaxParallelism() throws Exception {
+    test(TargetParallelism.max(), 4);
+  }
+
+  @Test
+  public void testSortedBucketTransformAutoParallelism() throws Exception {
+    test(TargetParallelism.auto(), -1);
+  }
 
   @Test
   public void testSortedBucketTransformCustomParallelism() throws Exception {

@@ -2,7 +2,7 @@ name: deploy
 
 env:
   ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-  GOOGLE_APPLICATION_CREDENTIALS: scripts/gha-data-integration-test.json
+  GOOGLE_APPLICATION_CREDENTIALS: scripts/gha-it.json
   GOOGLE_PROJECT_ID: data-integration-test
 
 on:
@@ -15,13 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - name: cache SBT
-        uses: coursier/cache-action@v5
-      - name: java ${{matrix.java}} setup
-        uses: olafurpg/setup-scala@v10
+        uses: coursier/cache-action@v6
+      - name: Java 11 setup
+        uses: olafurpg/setup-scala@v12
+        with:
+          java-version: graalvm-ce-java11@21.0.0
       - run: sbt scio-repl/assembly
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: actions/create-release@v1.1.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -44,9 +46,11 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@v2.3.4
       - name: Cache SBT
-        uses: coursier/cache-action@v5
-      - name: Setup Java and Scala
-        uses: olafurpg/setup-scala@v10
+        uses: coursier/cache-action@v6
+      - name: Java 11 setup
+        uses: olafurpg/setup-scala@v12
+        with:
+          java-version: graalvm-ce-java11@21.0.0
       - name: Setup project
         run: scripts/gha_setup.sh
       - name: Build documentation
@@ -54,7 +58,7 @@ jobs:
         env:
           SOCCO: true
       - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@4.1.0
+        uses: JamesIves/github-pages-deploy-action@4.1.4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gh-pages

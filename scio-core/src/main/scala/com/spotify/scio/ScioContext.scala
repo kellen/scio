@@ -177,7 +177,6 @@ object ContextAndArgs {
   }
 
   import caseapp._
-  import caseapp.core.help._
   import caseapp.core.parser.ParserWithNameFormatter
 
   object TypedParser {
@@ -294,6 +293,10 @@ object ContextAndArgs {
   def apply(args: Array[String]): (ScioContext, Args) =
     withParser(DefaultParser[PipelineOptions]()).apply(args)
 
+  @deprecated(
+    "Case-app based argument parsing will be removed in 0.11.0, use PipelineOptions instead",
+    "0.10.4"
+  )
   def typed[T](args: Array[String])(implicit tap: TypedArgsParser[T, Try]): (ScioContext, T) =
     withParser(tap.parser).apply(args)
 
@@ -777,7 +780,7 @@ class ScioContext private[scio] (
    * Get an SCollection with a custom input transform. The transform should have a unique name.
    * @group input
    */
-  def customInput[T: Coder, I >: PBegin <: PInput](
+  def customInput[T, I >: PBegin <: PInput](
     name: String,
     transform: PTransform[I, PCollection[T]]
   ): SCollection[T] =

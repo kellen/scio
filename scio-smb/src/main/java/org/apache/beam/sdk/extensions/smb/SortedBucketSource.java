@@ -46,7 +46,6 @@ import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.coders.SerializableCoder;
-import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.extensions.smb.BucketMetadataUtil.PartitionMetadata;
 import org.apache.beam.sdk.extensions.smb.BucketMetadataUtil.SourceMetadata;
 import org.apache.beam.sdk.io.BoundedSource;
@@ -305,6 +304,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
   public BoundedReader<KV<FinalKeyT, CoGbkResult>> createReader(PipelineOptions options)
       throws IOException {
     return new MergeBucketsReader<>(
+        options,
         sources,
         bucketOffsetId,
         effectiveParallelism,
@@ -338,6 +338,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
     private int runningKeyGroupSize;
 
     MergeBucketsReader(
+        PipelineOptions options,
         List<BucketedInput<?, ?>> sources,
         Integer bucketId,
         int parallelism,
@@ -360,7 +361,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
 
       iterators =
           sources.stream()
-              .map(i -> i.createIterator(bucketId, parallelism))
+              .map(i -> i.createIterator(bucketId, parallelism, options))
               .toArray(KeyGroupIterator[]::new);
 
       resultSchema = BucketedInput.schemaOf(sources);
@@ -692,14 +693,20 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
           .sum();
     }
 
-    KeyGroupIterator<byte[], V> createIterator(int bucketId, int targetParallelism) {
+    KeyGroupIterator<byte[], V> createIterator(
+        int bucketId, int targetParallelism, PipelineOptions options) {
+      final SortedBucketOptions opts = options.as(SortedBucketOptions.class);
+      final int bufferSize = opts.getSortedBucketReadBufferSize();
+      final int diskBufferMb = opts.getSortedBucketReadDiskBufferMb();
+      FileOperations.setDiskBufferMb(diskBufferMb);
       final List<Iterator<V>> iterators =
           mapBucketFiles(
               bucketId,
               targetParallelism,
               file -> {
                 try {
-                  return fileOperations.iterator(file);
+                  Iterator<V> iterator = fileOperations.iterator(file);
+                  return bufferSize > 0 ? new BufferedIterator<>(iterator, bufferSize) : iterator;
                 } catch (Exception e) {
                   throw new RuntimeException(e);
                 }
@@ -748,19 +755,20 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
     @SuppressWarnings("unchecked")
     private void writeObject(ObjectOutputStream outStream) throws IOException {
       SerializableCoder.of(TupleTag.class).encode(tupleTag, outStream);
-      StringUtf8Coder.of().encode(filenameSuffix, outStream);
-      SerializableCoder.of(FileOperations.class).encode(fileOperations, outStream);
       ListCoder.of(ResourceIdCoder.of()).encode(inputDirectories, outStream);
-      SerializableCoder.of(Predicate.class).encode(predicate, outStream);
+      outStream.writeUTF(filenameSuffix);
+      outStream.writeObject(fileOperations);
+      outStream.writeObject(predicate);
+      outStream.flush();
     }
 
     @SuppressWarnings("unchecked")
     private void readObject(ObjectInputStream inStream) throws ClassNotFoundException, IOException {
       this.tupleTag = SerializableCoder.of(TupleTag.class).decode(inStream);
-      this.filenameSuffix = StringUtf8Coder.of().decode(inStream);
-      this.fileOperations = SerializableCoder.of(FileOperations.class).decode(inStream);
       this.inputDirectories = ListCoder.of(ResourceIdCoder.of()).decode(inStream);
-      this.predicate = SerializableCoder.of(Predicate.class).decode(inStream);
+      this.filenameSuffix = inStream.readUTF();
+      this.fileOperations = (FileOperations<V>) inStream.readObject();
+      this.predicate = (Predicate<V>) inStream.readObject();
     }
   }
 

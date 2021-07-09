@@ -21,6 +21,7 @@ import static org.apache.beam.sdk.extensions.smb.SortedBucketSource.BucketedInpu
 import static org.apache.beam.sdk.extensions.smb.TestUtils.fromFolder;
 
 import java.nio.channels.Channels;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -35,6 +36,7 @@ import org.apache.beam.sdk.extensions.smb.SortedBucketTransform.TransformFn;
 import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.fs.EmptyMatchTreatment;
 import org.apache.beam.sdk.io.fs.MatchResult.Status;
+import org.apache.beam.sdk.io.fs.ResourceId;
 import org.apache.beam.sdk.metrics.DistributionResult;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Combine;
@@ -216,15 +218,17 @@ public class SortedBucketTransformTest {
 
     for (BucketShardId bucketShardId : metadata.getAllBucketShardIds()) {
       final FileOperations.Reader<String> outputReader = new TestFileOperations().createReader();
+      final ResourceId resourceId = fileAssignment.forBucket(
+          BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()),
+          metadata);
       outputReader.prepareRead(
-          FileSystems.open(
-              fileAssignment.forBucket(
-                  BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()),
-                  metadata)));
+          FileSystems.open(resourceId
+              ));
 
+      final ArrayList<String> lines = Lists.newArrayList(outputReader.iterator());
       bucketsToOutputs.put(
           BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()),
-          Lists.newArrayList(outputReader.iterator()));
+          lines);
     }
 
     Assert.assertSame(

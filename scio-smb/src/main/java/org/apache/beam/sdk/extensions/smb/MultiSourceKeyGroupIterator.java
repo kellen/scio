@@ -19,13 +19,19 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterators;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.primitives.UnsignedBytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("unchecked")
 public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
+  private static final Logger LOG = LoggerFactory.getLogger(MultiSourceKeyGroupIterator.class);
+
   private enum AcceptKeyGroup { ACCEPT, REJECT, UNSET }
   private Optional<KV<FinalKeyT, CoGbkResult>> head = null;
 
   private final Coder<FinalKeyT> keyCoder;
-  // TODO
+
+  private int runningKeyGroupSize = 0;
   private final Distribution keyGroupSize;
   boolean materializeKeyGroup;
   private Comparator<byte[]> bytesComparator = UnsignedBytes.lexicographicalComparator();
@@ -53,7 +59,6 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
         sources.stream()
             .map(src -> new BucketedInputSource<>(src, bucketId, effectiveParallelism, options))
             .collect(Collectors.toList());
-    // TODO document
     this.keyGroupFilter = (bytes) -> sources.get(0).getMetadata().rehashBucket(bytes, effectiveParallelism) == bucketId;
 
     advance();
@@ -68,17 +73,22 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
   public KV<FinalKeyT, CoGbkResult> next() {
     if(head == null) throw new IllegalStateException("Iterator head not yet initialized.");
     if(!head.isPresent()) throw new NoSuchElementException();
-
     KV<FinalKeyT, CoGbkResult> cur = head.get();
     advance();
     return cur;
   }
 
   private void advance() {
-    // once head is empty, all sources are exhausted, so short circuit return
+    // once all sources are exhausted, head is empty, so short circuit return
     if(head != null && !head.isPresent()) return;
 
     while(true) {
+      if (runningKeyGroupSize != 0) {
+        keyGroupSize.update(runningKeyGroupSize);
+        LOG.error("runningKeyGroupSize: " + runningKeyGroupSize + " in " + keyGroupSize.toString());
+        runningKeyGroupSize = 0;
+      }
+
       // advance iterators whose values have already been used.
       bucketedInputs.stream()
           .filter(src -> !src.isExhausted())
@@ -96,12 +106,12 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
         break;
       }
 
-      // we process keys in order, but since not all sources have all keys, find the minimum available key
+      // process keys in order, but since not all sources have all keys, find the minimum available key
       byte[] minKey = activeSources.stream()
           .map(src ->  src.currentKey())
           .min(bytesComparator)
           .orElse(null);
-      final Boolean emitBasedOnMinKeyBucketing = keyGroupFilter.apply(minKey);
+      final boolean emitBasedOnMinKeyBucketing = keyGroupFilter.apply(minKey);
 
       // output accumulator
       final List<Iterable<?>> valueMap = IntStream.range(0, resultSchema.size()).mapToObj(i -> new ArrayList<>()).collect(Collectors.toList());
@@ -112,7 +122,6 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
       for(BucketedInputSource<?, ?> src : activeSources) {
         // for each source, if the current key is equal to the minimum, consume it
         if(!src.isExhausted() && bytesComparator.compare(minKey, src.currentKey()) == 0) {
-          // TODO this check seems a little weird, not sure if skipping it by keeping `acceptKeyGroup` around is helpful
           // if this key group has been previously accepted by a preceding source, emit.
           // "  "    "   "     "   "    "          rejected by a preceding source, don't emit.
           // if this is the first source for this key group, emit if either the source settings or the min key say we should.
@@ -122,7 +131,7 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
           final Iterator<Object> keyGroupIterator = (Iterator<Object>) src.currentValue();
           if(emitKeyGroup) {
             acceptKeyGroup = AcceptKeyGroup.ACCEPT;
-            // data must be materialized (eagerly evaluated) if requested or if there is a predicate
+            // data must be eagerly materialized if requested or if there is a predicate
             boolean materialize = materializeKeyGroup || src.hasPredicate();
             int outputIndex = resultSchema.getIndex(src.tupleTag);
 
@@ -133,7 +142,7 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
                   new SortedBucketSource.TraversableOnceIterable<>(
                       Iterators.transform(
                           keyGroupIterator, (value) -> {
-                            // TODO runningKeyGroupSize++;
+                            runningKeyGroupSize++;
                             return value;
                           }
                       )
@@ -141,13 +150,13 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
               );
 
             } else {
-              // TODO unclear why this must be eager
-              // eagerly materialize this iterator into `List<Object>` by applying the predicate to each value
+              // eagerly materialize this iterator and apply the predicate to each value
+              // this must be eager because the predicate can operate on the entire collection
               final List<Object> values = (List<Object>) valueMap.get(outputIndex);
               keyGroupIterator.forEachRemaining(v -> {
                 if (((SortedBucketSource.Predicate<Object>) src.predicate).apply(values, v)) {
                   values.add(v);
-                  // TODO runningKeyGroupSize++;
+                  runningKeyGroupSize++;
                 }
               });
             }
@@ -186,11 +195,11 @@ public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<Final
         int parallelism,
         PipelineOptions options
     ) {
-      this.predicate = source.predicate;
+      this.predicate = source.getPredicate();
       this.tupleTag = source.getTupleTag();
       this.iter = source.createIterator(bucketId, parallelism, options);
 
-      int numBuckets = source.getOrComputeMetadata().getCanonicalMetadata().getNumBuckets();
+      int numBuckets = source.getMetadata().getNumBuckets();
       // The canonical # buckets for this source. If # buckets >= the parallelism of the job,
       // we know that the key doesn't need to be re-hashed as it's already in the right bucket.
       this.emitByDefault = numBuckets >= parallelism;

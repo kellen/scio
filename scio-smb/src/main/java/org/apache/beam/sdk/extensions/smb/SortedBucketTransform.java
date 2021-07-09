@@ -77,6 +77,7 @@ import org.slf4j.LoggerFactory;
  * @param <FinalValueT>
  */
 public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PBegin, WriteResult> {
+  private static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransform.class);
   // Dataflow calls split() with a suggested byte size that assumes a higher throughput than
   // SMB joins have. By adjusting this suggestion we can arrive at a more optimal parallelism.
   static final Double DESIRED_SIZE_BYTES_ADJUSTMENT_FACTOR = 0.33;
@@ -84,10 +85,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
   private final BucketSource<FinalKeyT> bucketSource;
   private final DoFn<Iterable<MergedBucket>, KV<BucketShardId, ResourceId>> finalizeBuckets;
   private final ParDo.SingleOutput<BucketItem, MergedBucket> doFn;
-
-  // TODO remove
-  ResourceId tempDir;
-  private static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransform.class);
 
   public SortedBucketTransform(
       Class<FinalKeyT> finalKeyClass,
@@ -102,9 +99,8 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
       NewBucketMetadataFn<FinalKeyT, FinalValueT> newBucketMetadataFn,
       FileOperations<FinalValueT> fileOperations,
       String filenameSuffix,
-      String filenamePrefix) {
-    // TODO remove
-    tempDir = tempDirectory;
+      String filenamePrefix
+  ) {
     // TODO make this impossible by construction
     assert !((transformFn == null) && (sideInputTransformFn == null)); // at least one defined
     assert !((transformFn != null) && (sideInputTransformFn != null)); // only one defined
@@ -131,32 +127,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
         begin.getPipeline()
             // outputs bucket offsets for the various SMB readers
             .apply("BucketOffsets", Read.from(bucketSource))
-            .apply("Foo", this.doFn)
-            .apply(ParDo.of(
-                new DoFn<MergedBucket, MergedBucket>() {
-                  @ProcessElement
-                  public void processElement(
-                      @Element MergedBucket e,
-                      OutputReceiver<MergedBucket> out
-                  ) {
-                    String fn = e.destination.getFilename();
-                    try {
-                      final ReadableByteChannel channel = FileSystems.open(e.destination);
-                      final BufferedReader reader =
-                          new BufferedReader(new InputStreamReader(Channels.newInputStream(channel), Charset.defaultCharset()));
-                      String contents = reader.lines().collect(Collectors.joining());
-                      LOG.error("fn " + fn + " contents: \n" + contents);
-                    } catch (IOException errr) {
-                      LOG.error("no file: " + fn);
-//                      throw new RuntimeException(errr);
-                    }
-                    LOG.error(
-                        "" + e.bucketId + " -> " + e.destination.getFilename() + " buckets: " + e.totalNumBuckets
-                    );
-                    out.output(e);
-                  }
-                }
-            ))
+            .apply("MergeBuckets", this.doFn)
             .apply(Filter.by(Objects::nonNull))
             .apply(Group.globally())
             .apply(
@@ -263,7 +234,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     @Override
     public void accept(ValueT t) {
       try {
-        LOG.error("writing: " + t);
         writer.write(t);
       } catch (IOException e) {
         throw new RuntimeException("Write of element " + t + " failed: ", e);
@@ -429,8 +399,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
       int effectiveParallelism = e.effectiveParallelism;
 
       ResourceId dst = fileAssignment.forBucket(BucketShardId.of(bucketId, 0), effectiveParallelism, 1);
-      LOG.error("DoFn: " + bucketId + " -> " + effectiveParallelism + " -> " + dst.getFilename());
-
       OutputCollector<FinalValueT> outputCollector;
       try {
         outputCollector = new OutputCollector<>(fileOperations.createWriter(dst));
@@ -438,8 +406,15 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
         throw new RuntimeException(err);
       }
 
-      final MultiSourceKeyGroupIterator<FinalKeyT> iter =
-          new MultiSourceKeyGroupIterator<>(sources, sourceSpec, keyGroupSize, false, bucketId, effectiveParallelism, context.getPipelineOptions());
+      final MultiSourceKeyGroupIterator<FinalKeyT> iter = new MultiSourceKeyGroupIterator<>(
+          sources,
+          sourceSpec,
+          keyGroupSize,
+          false,
+          bucketId,
+          effectiveParallelism,
+          context.getPipelineOptions()
+      );
       while(iter.hasNext()) {
         try {
           KV<FinalKeyT, CoGbkResult> mergedKeyGroup = iter.next();
@@ -458,12 +433,8 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
           throw new RuntimeException("Failed to write merged key group", ex);
         }
       }
-
-      String pre = "DoFn.pre: " + bucketId + " -> " + effectiveParallelism + " -> " + dst.getFilename();
-      final MergedBucket mb = new MergedBucket(bucketId, dst, effectiveParallelism);
-      LOG.error("\n\t" + pre + "\n\t" +
-                "DoFn.out: " + mb.bucketId + " -> " + mb.totalNumBuckets + " -> " + mb.destination.getFilename());
-      out.output(mb);
+      outputCollector.onComplete();
+      out.output(new MergedBucket(bucketId, dst, effectiveParallelism));
     }
   }
 

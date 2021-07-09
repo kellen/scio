@@ -429,11 +429,8 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
 
         // Find next key-value groups
         // gets the "first" key
-        // TODO: why? cuz it's the first in the input files?
         final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> minKeyEntry = nextKeyGroups.entrySet().stream().min(keyComparator).orElse(null);
 
-        // TODO what is `valueMap` for?
-        // TODO why use resultSchema here? should be == numSources??
         final List<Iterable<?>> valueMap = new ArrayList<>();
         for (int i = 0; i < resultSchema.size(); i++) {
           valueMap.add(new ArrayList<>());
@@ -569,8 +566,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
     private String filenameSuffix;
     private FileOperations<V> fileOperations;
     private List<ResourceId> inputDirectories;
-    // TODO/FIXME made this public for KellenTransformDoFn
-    public Predicate<V> predicate;
+    private Predicate<V> predicate;
     private transient SourceMetadata<K, V> sourceMetadata;
 
     public BucketedInput(
@@ -611,6 +607,8 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
       return tupleTag;
     }
 
+    public Predicate<V> getPredicate() { return predicate; }
+
     public Coder<V> getCoder() {
       return fileOperations.getCoder();
     }
@@ -628,8 +626,7 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
       return getOrComputeMetadata().getPartitionMetadata();
     }
 
-    // TODO/FIXME made public
-    public SourceMetadata<K, V> getOrComputeMetadata() {
+    private SourceMetadata<K, V> getOrComputeMetadata() {
       if (sourceMetadata == null) {
         sourceMetadata =
             BucketMetadataUtil.get().getSourceMetadata(inputDirectories, filenameSuffix);

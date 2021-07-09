@@ -19,6 +19,8 @@ package org.apache.beam.sdk.extensions.smb;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.text.DecimalFormat;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -78,6 +80,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
 
   private final MergeAndWriteBucketsSource<FinalKeyT, FinalValueT> boundedSource;
   private final FinalizeTransformedBuckets<FinalValueT> finalizeBuckets;
+  ResourceId tempDir;
 
   public SortedBucketTransform(
       Class<FinalKeyT> finalKeyClass,
@@ -93,6 +96,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     final SMBFilenamePolicy filenamePolicy =
         new SMBFilenamePolicy(outputDirectory, filenamePrefix, filenameSuffix);
     final SourceSpec<FinalKeyT> sourceSpec = SourceSpec.from(finalKeyClass, sources);
+    this.tempDir = tempDirectory;
 
     boundedSource =
         new MergeAndWriteBucketsSource<>(
@@ -116,12 +120,40 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
             sourceSpec.hashType);
   }
 
+  private static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransform.class);
+
+
   @Override
   public final WriteResult expand(PBegin begin) {
     return WriteResult.fromTuple(
         begin
             .getPipeline()
             .apply("MergeAndWriteTempBuckets", Read.from(boundedSource))
+            .apply(ParDo.of(
+                new DoFn<MergedBucket, MergedBucket>() {
+                  @ProcessElement
+                  public void processElement(
+                      @Element MergedBucket e,
+                      OutputReceiver<MergedBucket> out
+                  ) {
+                    if(e != null) {
+                      String fn = tempDir + e.destination.getFilename();
+                      try {
+                        String contents = Files.lines(Paths.get(fn)).collect(Collectors.joining());
+                        LOG.error("fn " + fn + " contents: \n" + contents);
+                      } catch (IOException errr) {
+                        LOG.error("no file: " + fn);
+//                      throw new RuntimeException(errr);
+                      }
+
+                      LOG.error(
+                          "" + e.bucketId + " -> " + e.destination.getFilename() + " buckets: " + e.totalNumBuckets
+                      );
+                      out.output(e);
+                    }
+                  }
+                }
+            ))
             .apply(Filter.by(Objects::nonNull))
             .apply(Group.globally())
             .apply(

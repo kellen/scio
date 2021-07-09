@@ -134,20 +134,20 @@ public class SortedBucketTransformTest {
                 predicate));
   }
 
-  @Test
-  public void testSortedBucketTransformMinParallelism() throws Exception {
-    test(TargetParallelism.min(), 2);
-  }
-
-  @Test
-  public void testSortedBucketTransformMaxParallelism() throws Exception {
-    test(TargetParallelism.max(), 4);
-  }
-
-  @Test
-  public void testSortedBucketTransformAutoParallelism() throws Exception {
-    test(TargetParallelism.auto(), -1);
-  }
+//  @Test
+//  public void testSortedBucketTransformMinParallelism() throws Exception {
+//    test(TargetParallelism.min(), 2);
+//  }
+//
+//  @Test
+//  public void testSortedBucketTransformMaxParallelism() throws Exception {
+//    test(TargetParallelism.max(), 4);
+//  }
+//
+//  @Test
+//  public void testSortedBucketTransformAutoParallelism() throws Exception {
+//    test(TargetParallelism.auto(), -1);
+//  }
 
   @Test
   public void testSortedBucketTransformCustomParallelism() throws Exception {

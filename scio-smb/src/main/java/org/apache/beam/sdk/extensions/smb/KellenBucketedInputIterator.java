@@ -2,12 +2,11 @@ package org.apache.beam.sdk.extensions.smb;
 
 import java.util.Iterator;
 import java.util.Optional;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.TupleTag;
 
-class KellenBucketedInputIterator<K, V> { // implements Iterator<KV<byte[], Iterator<V>>> {
-  private final SortedBucketSource.BucketedInput<K, V> source;
-
+class KellenBucketedInputIterator<K, V> {
   public final TupleTag<?> tupleTag;
   public final boolean emitByDefault;
 
@@ -18,12 +17,12 @@ class KellenBucketedInputIterator<K, V> { // implements Iterator<KV<byte[], Iter
   public KellenBucketedInputIterator(
       SortedBucketSource.BucketedInput<K, V>  source,
       int bucketId,
-      int parallelism
+      int parallelism,
+      PipelineOptions options
   ) {
-    this.source = source;
-    this.predicate = this.source.predicate;
+    this.predicate = source.predicate;
     this.tupleTag = source.getTupleTag();
-    this.iter = this.source.createIterator(bucketId, parallelism);
+    this.iter = source.createIterator(bucketId, parallelism, options);
 
     int numBuckets = source.getOrComputeMetadata().getCanonicalMetadata().getNumBuckets();
     // The canonical # buckets for this source. If # buckets >= the parallelism of the job,

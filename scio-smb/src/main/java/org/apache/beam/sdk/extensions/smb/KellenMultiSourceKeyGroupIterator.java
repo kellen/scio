@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.metrics.Distribution;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.join.CoGbkResult;
 import org.apache.beam.sdk.transforms.join.CoGbkResultSchema;
 import org.apache.beam.sdk.values.KV;
@@ -38,7 +39,8 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
        Distribution keyGroupSize,
        boolean materializeKeyGroup,
       int bucketId,
-      int effectiveParallelism
+      int effectiveParallelism,
+      PipelineOptions options
   ) {
     this.keyCoder = sourceSpec.keyCoder;
     this.keyGroupSize = keyGroupSize;
@@ -48,7 +50,7 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
     this.resultSchema = SortedBucketSource.BucketedInput.schemaOf(sources);
     this.bucketedInputs =
         sources.stream()
-            .map(src -> new KellenBucketedInputIterator<>(src, bucketId, effectiveParallelism))
+            .map(src -> new KellenBucketedInputIterator<>(src, bucketId, effectiveParallelism, options))
             .collect(Collectors.toList());
     // TODO document
     this.keyGroupFilter = (bytes) -> sources.get(0).getMetadata().rehashBucket(bytes, effectiveParallelism) == bucketId;

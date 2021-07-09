@@ -1,13 +1,21 @@
 package org.apache.beam.sdk.extensions.smb;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.stream.Stream;
 import org.apache.beam.sdk.io.fs.ResourceId;
 import org.apache.beam.sdk.metrics.Distribution;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.join.CoGbkResult;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.values.KV;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class KellenTransformDoFn {
@@ -38,6 +46,7 @@ public class KellenTransformDoFn {
         OutputCollector<FinalValueT> outputCollector,
         BoundedWindow window
     );
+    private static final Logger LOG = LoggerFactory.getLogger(KellenTransformDoFn.class);
 
     @ProcessElement
     public void processElement(
@@ -50,6 +59,8 @@ public class KellenTransformDoFn {
       int effectiveParallelism = e.effectiveParallelism;
 
       ResourceId dst = fileAssignment.forBucket(BucketShardId.of(bucketId, 0), effectiveParallelism, 1);
+      LOG.error("DoFn: " + bucketId + " -> " + effectiveParallelism + " -> " + dst.getFilename());
+
       OutputCollector<FinalValueT> outputCollector;
       try {
         outputCollector = new OutputCollector<>(fileOperations.createWriter(dst));
@@ -57,7 +68,8 @@ public class KellenTransformDoFn {
         throw new RuntimeException(err);
       }
 
-      final KellenMultiSourceKeyGroupIterator<FinalKeyT> iter = new KellenMultiSourceKeyGroupIterator<>(sources, sourceSpec, keyGroupSize, false, bucketId, effectiveParallelism);
+      final KellenMultiSourceKeyGroupIterator<FinalKeyT> iter =
+          new KellenMultiSourceKeyGroupIterator<>(sources, sourceSpec, keyGroupSize, false, bucketId, effectiveParallelism, context.getPipelineOptions());
       while(iter.hasNext()) {
         try {
           KV<FinalKeyT, CoGbkResult> mergedKeyGroup = iter.next();
@@ -72,11 +84,18 @@ public class KellenTransformDoFn {
               ((SortedBucketSource.TraversableOnceIterable<?>) maybeUnfinishedIt).ensureExhausted();
             }
           });
-          out.output(new KellenBucketTransform.MergedBucket(bucketId, dst, effectiveParallelism));
+
+
         } catch (Exception ex) {
           throw new RuntimeException("Failed to write merged key group", ex);
         }
       }
+
+      String pre = "DoFn.pre: " + bucketId + " -> " + effectiveParallelism + " -> " + dst.getFilename();
+      final KellenBucketTransform.MergedBucket mb = new KellenBucketTransform.MergedBucket(bucketId, dst, effectiveParallelism);
+      LOG.error("\n\t" + pre + "\n\t" +
+                "DoFn.out: " + mb.bucketId + " -> " + mb.totalNumBuckets + " -> " + mb.destination.getFilename());
+      out.output(mb);
     }
   }
 
@@ -133,6 +152,7 @@ public class KellenTransformDoFn {
   // copy-paste from SortedBucketTransform.java
   private static class OutputCollector<ValueT> implements KellenBucketTransform.SerializableConsumer<ValueT> {
     private final FileOperations.Writer<ValueT> writer;
+    private static final Logger LOG = LoggerFactory.getLogger(KellenTransformDoFn.class);
 
     OutputCollector(FileOperations.Writer<ValueT> writer) {
       this.writer = writer;
@@ -149,6 +169,7 @@ public class KellenTransformDoFn {
     @Override
     public void accept(ValueT t) {
       try {
+        LOG.error("writing: " + t);
         writer.write(t);
       } catch (IOException e) {
         throw new RuntimeException("Write of element " + t + " failed: ", e);

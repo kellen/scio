@@ -1,18 +1,29 @@
 package org.apache.beam.sdk.extensions.smb;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.Serializable;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
 import org.apache.beam.sdk.extensions.smb.BucketMetadata.HashType;
 import org.apache.beam.sdk.extensions.smb.SMBFilenamePolicy.FileAssignment;
 import org.apache.beam.sdk.extensions.smb.SortedBucketSink.RenameBuckets;
 import org.apache.beam.sdk.extensions.smb.SortedBucketSink.WriteResult;
+import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.Read;
 import org.apache.beam.sdk.io.fs.ResourceId;
 import org.apache.beam.sdk.metrics.Distribution;
@@ -29,12 +40,16 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class KellenBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PBegin, WriteResult> {
   private final KellenBucketSource<FinalKeyT> bucketSource;
   private final DoFn<Iterable<MergedBucket>, KV<BucketShardId, ResourceId>> finalizeBuckets;
   private final ParDo.SingleOutput<KellenBucketItem, MergedBucket> doFn;
+
+  ResourceId tempDir;
 
   public KellenBucketTransform(
       Class<FinalKeyT> finalKeyClass,
@@ -50,6 +65,7 @@ public class KellenBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
       FileOperations<FinalValueT> fileOperations,
       String filenameSuffix,
       String filenamePrefix) {
+    tempDir = tempDirectory;
     // TODO make this impossible by construction
     assert !((transformFn == null) && (sideInputTransformFn == null)); // at least one defined
     assert !((transformFn != null) && (sideInputTransformFn != null)); // only one defined
@@ -70,6 +86,8 @@ public class KellenBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     }
   }
 
+  private static final Logger LOG = LoggerFactory.getLogger(KellenBucketTransform.class);
+
   @Override
   public WriteResult expand(final PBegin begin) {
     return WriteResult.fromTuple(
@@ -77,6 +95,34 @@ public class KellenBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
             // outputs bucket offsets for the various SMB readers
             .apply("BucketOffsets", Read.from(bucketSource))
             .apply("Foo", this.doFn)
+            .apply(ParDo.of(
+                new DoFn<MergedBucket, MergedBucket>() {
+                  @ProcessElement
+                  public void processElement(
+                      @Element MergedBucket e,
+                      OutputReceiver<KellenBucketTransform.MergedBucket> out
+                  ) {
+
+                    String fn = e.destination.getFilename();
+                    try {
+                      final ReadableByteChannel channel = FileSystems.open(e.destination);
+                      final BufferedReader reader =
+                          new BufferedReader(new InputStreamReader(Channels.newInputStream(channel), Charset.defaultCharset()));
+                      String contents = reader.lines().collect(Collectors.joining());
+                      LOG.error("fn " + fn + " contents: \n" + contents);
+                    } catch (IOException errr) {
+                      LOG.error("no file: " + fn);
+//                      throw new RuntimeException(errr);
+                    }
+
+
+                    LOG.error(
+                        "" + e.bucketId + " -> " + e.destination.getFilename() + " buckets: " + e.totalNumBuckets
+                    );
+                    out.output(e);
+                  }
+                }
+            ))
             .apply(Filter.by(Objects::nonNull))
             .apply(Group.globally())
             .apply(

@@ -17,50 +17,36 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterators;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.primitives.UnsignedBytes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
-  static final Logger LOG = LoggerFactory.getLogger(KellenMultiSourceKeyGroupIterator.class);
-
   private enum AcceptKeyGroup { ACCEPT, REJECT, UNSET }
-
   private Optional<KV<FinalKeyT, CoGbkResult>> head = null;
 
-//  private final SMBFilenamePolicy.FileAssignment fileAssignment;
-//  private final FileOperations<FinalValueT> fileOperations;
   private final Coder<FinalKeyT> keyCoder;
-//  private final List<SortedBucketSource.BucketedInput<?, ?>> sources;
   // TODO
   private final Distribution keyGroupSize;
   boolean materializeKeyGroup;
   private Comparator<byte[]> bytesComparator = UnsignedBytes.lexicographicalComparator();
 
   private final CoGbkResultSchema resultSchema;
-  private final List<KellenBucketedInputIterator<?, ?>> foobar;
+  private final List<KellenBucketedInputIterator<?, ?>> bucketedInputs;
   private final Function<byte[], Boolean> keyGroupFilter;
 
   public KellenMultiSourceKeyGroupIterator(
       List<SortedBucketSource.BucketedInput<?, ?>> sources,
        SourceSpec<FinalKeyT> sourceSpec,
-//       SMBFilenamePolicy.FileAssignment fileAssignment,
-//       FileOperations<FinalValueT> fileOperations,
        Distribution keyGroupSize,
        boolean materializeKeyGroup,
       int bucketId,
       int effectiveParallelism
   ) {
-//    this.sources = sources;
-//    this.fileAssignment = fileAssignment;
-//    this.fileOperations = fileOperations;
     this.keyCoder = sourceSpec.keyCoder;
     this.keyGroupSize = keyGroupSize;
     this.materializeKeyGroup = materializeKeyGroup;
 
     // source TupleTags `and`-ed together
     this.resultSchema = SortedBucketSource.BucketedInput.schemaOf(sources);
-    // TODO rename
-    this.foobar =
+    this.bucketedInputs =
         sources.stream()
             .map(src -> new KellenBucketedInputIterator<>(src, bucketId, effectiveParallelism))
             .collect(Collectors.toList());
@@ -91,13 +77,13 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
 
     while(true) {
       // advance iterators whose values have already been used.
-      foobar.stream()
+      bucketedInputs.stream()
           .filter(src -> !src.isExhausted())
           .filter(src -> !src.currentValue().hasNext())
           .forEach(src -> src.advance());
 
       // only operate on the non-exhausted sources
-      List<KellenBucketedInputIterator<?, ?>> activeSources = foobar.stream()
+      List<KellenBucketedInputIterator<?, ?>> activeSources = bucketedInputs.stream()
               .filter(src -> !src.isExhausted())
               .collect(Collectors.toList());
 

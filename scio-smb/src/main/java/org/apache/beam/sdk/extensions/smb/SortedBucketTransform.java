@@ -365,6 +365,15 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     }
 
     @Override
+    public long getEstimatedSizeBytes(final PipelineOptions options) throws Exception {
+      if (estimatedSizeBytes == -1) {
+        estimatedSizeBytes = sources.parallelStream().mapToLong(SortedBucketSource.BucketedInput::getOrSampleByteSize).sum();
+        LOG.info("Estimated byte size is " + estimatedSizeBytes);
+      }
+      return estimatedSizeBytes;
+    }
+
+    @Override
     public Coder<BucketItem> getOutputCoder() {
       return NullableCoder.of(SerializableCoder.of(BucketItem.class));
     }
@@ -373,15 +382,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
       builder.add(DisplayData.item("targetParallelism", targetParallelism.toString()));
-    }
-
-    @Override
-    public long getEstimatedSizeBytes(final PipelineOptions options) throws Exception {
-      if (estimatedSizeBytes == -1) {
-        estimatedSizeBytes = sources.parallelStream().mapToLong(SortedBucketSource.BucketedInput::getOrSampleByteSize).sum();
-        LOG.info("Estimated byte size is " + estimatedSizeBytes);
-      }
-      return estimatedSizeBytes;
     }
 
     @Override

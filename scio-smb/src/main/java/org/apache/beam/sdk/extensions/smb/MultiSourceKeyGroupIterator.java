@@ -15,11 +15,12 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.join.CoGbkResult;
 import org.apache.beam.sdk.transforms.join.CoGbkResultSchema;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterators;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.primitives.UnsignedBytes;
 
-public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
+public class MultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
   private enum AcceptKeyGroup { ACCEPT, REJECT, UNSET }
   private Optional<KV<FinalKeyT, CoGbkResult>> head = null;
 
@@ -30,10 +31,10 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
   private Comparator<byte[]> bytesComparator = UnsignedBytes.lexicographicalComparator();
 
   private final CoGbkResultSchema resultSchema;
-  private final List<KellenBucketedInputIterator<?, ?>> bucketedInputs;
+  private final List<BucketedInputSource<?, ?>> bucketedInputs;
   private final Function<byte[], Boolean> keyGroupFilter;
 
-  public KellenMultiSourceKeyGroupIterator(
+  public MultiSourceKeyGroupIterator(
       List<SortedBucketSource.BucketedInput<?, ?>> sources,
        SourceSpec<FinalKeyT> sourceSpec,
        Distribution keyGroupSize,
@@ -50,7 +51,7 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
     this.resultSchema = SortedBucketSource.BucketedInput.schemaOf(sources);
     this.bucketedInputs =
         sources.stream()
-            .map(src -> new KellenBucketedInputIterator<>(src, bucketId, effectiveParallelism, options))
+            .map(src -> new BucketedInputSource<>(src, bucketId, effectiveParallelism, options))
             .collect(Collectors.toList());
     // TODO document
     this.keyGroupFilter = (bytes) -> sources.get(0).getMetadata().rehashBucket(bytes, effectiveParallelism) == bucketId;
@@ -85,7 +86,7 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
           .forEach(src -> src.advance());
 
       // only operate on the non-exhausted sources
-      List<KellenBucketedInputIterator<?, ?>> activeSources = bucketedInputs.stream()
+      List<BucketedInputSource<?, ?>> activeSources = bucketedInputs.stream()
               .filter(src -> !src.isExhausted())
               .collect(Collectors.toList());
 
@@ -108,7 +109,7 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
       // minKey will be accepted or rejected by the first source which has it.
       // acceptKeyGroup short-circuits the 'emit' logic below once a decision is made on minKey.
       AcceptKeyGroup acceptKeyGroup = AcceptKeyGroup.UNSET;
-      for(KellenBucketedInputIterator<?, ?> src : activeSources) {
+      for(BucketedInputSource<?, ?> src : activeSources) {
         // for each source, if the current key is equal to the minimum, consume it
         if(!src.isExhausted() && bytesComparator.compare(minKey, src.currentKey()) == 0) {
           // TODO this check seems a little weird, not sure if skipping it by keeping `acceptKeyGroup` around is helpful
@@ -167,6 +168,57 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
         } catch (Exception e) {
           throw new RuntimeException("Failed to decode key group", e);
         }
+      }
+    }
+  }
+
+  private static class BucketedInputSource<K, V> {
+    public final TupleTag<?> tupleTag;
+    public final boolean emitByDefault;
+
+    private final KeyGroupIterator<byte[], V> iter;
+    final SortedBucketSource.Predicate<V> predicate;
+    private Optional<KV<byte[], Iterator<V>>> head;
+
+    public BucketedInputSource(
+        SortedBucketSource.BucketedInput<K, V>  source,
+        int bucketId,
+        int parallelism,
+        PipelineOptions options
+    ) {
+      this.predicate = source.predicate;
+      this.tupleTag = source.getTupleTag();
+      this.iter = source.createIterator(bucketId, parallelism, options);
+
+      int numBuckets = source.getOrComputeMetadata().getCanonicalMetadata().getNumBuckets();
+      // The canonical # buckets for this source. If # buckets >= the parallelism of the job,
+      // we know that the key doesn't need to be re-hashed as it's already in the right bucket.
+      this.emitByDefault = numBuckets >= parallelism;
+
+      advance();
+    }
+
+    public boolean hasPredicate() {
+      return this.predicate != null;
+    }
+
+    public byte[] currentKey() {
+      return head.get().getKey();
+    }
+
+    public Iterator<V> currentValue() {
+      return head.get().getValue();
+    }
+
+    public boolean isExhausted() {
+      return !head.isPresent();
+    }
+
+    public void advance() {
+      if(iter.hasNext()) {
+        head = Optional.of(iter.next());
+      } else {
+        head = Optional.empty();
       }
     }
   }

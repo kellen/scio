@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.extensions.smb.SMBFilenamePolicy.FileAssignment;
 import org.apache.beam.sdk.extensions.smb.SortedBucketSource.Predicate;
@@ -55,6 +56,8 @@ import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Unit tests for {@link SortedBucketTransform}. */
 public class SortedBucketTransformTest {
@@ -72,6 +75,7 @@ public class SortedBucketTransformTest {
   private static final Set<String> expected = ImmutableSet.of("d1-d2", "e1-e2");
 
   private static List<BucketedInput<?, ?>> sources;
+  static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransformTest.class);
 
   private static final TransformFn<String, String> mergeFunction =
       (keyGroup, outputConsumer) ->
@@ -80,11 +84,14 @@ public class SortedBucketTransformTest {
               .getAll(new TupleTag<String>("lhs"))
               .forEach(
                   lhs -> {
+//                    LOG.error("lhs-" + lhs);
                     keyGroup
                         .getValue()
                         .getAll(new TupleTag<String>("rhs"))
                         .forEach(
                             rhs -> {
+//                              LOG.error("rhs-" + rhs);
+                              LOG.error(lhs + "-" + rhs);
                               outputConsumer.accept(lhs + "-" + rhs);
                             });
                   });
@@ -161,8 +168,10 @@ public class SortedBucketTransformTest {
             sources,
             targetParallelism,
             mergeFunction,
+            null,
             fromFolder(outputFolder),
             fromFolder(tempFolder),
+            null,
             (numBuckets, numShards, hashType) -> TestBucketMetadata.of(numBuckets, numShards),
             new TestFileOperations(),
             ".txt",

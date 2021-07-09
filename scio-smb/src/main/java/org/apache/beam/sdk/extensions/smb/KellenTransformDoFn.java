@@ -8,6 +8,8 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.join.CoGbkResult;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.values.KV;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class KellenTransformDoFn {
@@ -312,6 +314,8 @@ public class KellenTransformDoFn {
 //  }
 
   public static abstract class FML<FinalKeyT, FinalValueT> extends DoFn<KellenBucketItem, KellenBucketTransform.MergedBucket> {
+    static final Logger LOG = LoggerFactory.getLogger(FML.class);
+
     protected final SMBFilenamePolicy.FileAssignment fileAssignment;
     protected final FileOperations<FinalValueT> fileOperations;
     protected final List<SortedBucketSource.BucketedInput<?, ?>> sources;
@@ -374,7 +378,8 @@ public class KellenTransformDoFn {
                 }
               });
 
-          out.output(new KellenBucketTransform.MergedBucket(bucketId, dst, effectiveParallelism));
+          final KellenBucketTransform.MergedBucket mergedBucket = new KellenBucketTransform.MergedBucket(bucketId, dst, effectiveParallelism);
+          out.output(mergedBucket);
         } catch (Exception exxx) {
           throw new RuntimeException("Failed to write merged key group", exxx);
         }

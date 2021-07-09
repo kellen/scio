@@ -17,8 +17,12 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterators;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.primitives.UnsignedBytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV<FinalKeyT, CoGbkResult>> {
+  static final Logger LOG = LoggerFactory.getLogger(KellenMultiSourceKeyGroupIterator.class);
+
   private enum AcceptKeyGroup { ACCEPT, REJECT, UNSET }
 
   private Optional<KV<FinalKeyT, CoGbkResult>> head = null;
@@ -82,26 +86,43 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
   }
 
   private void advance() {
+    // once head is empty, all sources are exhausted, so short circuit return
+    if(head != null && !head.isPresent()) return;
+
     while(true) {
-      // complete once all sources are exhausted
-      boolean allExhausted = foobar.stream().allMatch(src -> src.isExhausted());
-      if(allExhausted) {
+      // advance iterators whose values have already been used.
+      foobar.stream()
+          .filter(src -> !src.isExhausted())
+          .filter(src -> !src.currentValue().hasNext())
+          .forEach(src -> src.advance());
+
+      // only operate on the non-exhausted sources
+      List<KellenBucketedInputIterator<?, ?>> activeSources = foobar.stream()
+              .filter(src -> !src.isExhausted())
+              .collect(Collectors.toList());
+
+      // once all sources are exhausted, set head to empty and return
+      if(activeSources.isEmpty()) {
         head = Optional.empty();
         break;
       }
 
       // we process keys in order, but since not all sources have all keys, find the minimum available key
-      byte[] minKey = foobar.stream().map(src -> src.currentKey()).min(bytesComparator).orElse(null);
+      byte[] minKey = activeSources.stream()
+          .map(src ->  src.currentKey())
+          .min(bytesComparator)
+          .orElse(null);
       final Boolean emitBasedOnMinKeyBucketing = keyGroupFilter.apply(minKey);
 
       // output accumulator
-      final List<Iterable<?>> valueMap =
-          IntStream.range(0, resultSchema.size()).mapToObj(i -> new ArrayList<>()).collect(Collectors.toList());
+      final List<Iterable<?>> valueMap = IntStream.range(0, resultSchema.size()).mapToObj(i -> new ArrayList<>()).collect(Collectors.toList());
 
+      // minKey will be accepted or rejected by the first source which has it.
+      // acceptKeyGroup short-circuits the 'emit' logic below once a decision is made on minKey.
       AcceptKeyGroup acceptKeyGroup = AcceptKeyGroup.UNSET;
-      for(KellenBucketedInputIterator<?, ?> src : foobar) {
+      for(KellenBucketedInputIterator<?, ?> src : activeSources) {
         // for each source, if the current key is equal to the minimum, consume it
-        if(bytesComparator.compare(minKey, src.currentKey()) == 0) {
+        if(!src.isExhausted() && bytesComparator.compare(minKey, src.currentKey()) == 0) {
           // TODO this check seems a little weird, not sure if skipping it by keeping `acceptKeyGroup` around is helpful
           // if this key group has been previously accepted by a preceding source, emit.
           // "  "    "   "     "   "    "          rejected by a preceding source, don't emit.
@@ -109,7 +130,7 @@ public class KellenMultiSourceKeyGroupIterator<FinalKeyT> implements Iterator<KV
           boolean emitKeyGroup = (acceptKeyGroup == AcceptKeyGroup.ACCEPT) ||
                                  ((acceptKeyGroup == AcceptKeyGroup.UNSET) && (src.emitByDefault || emitBasedOnMinKeyBucketing));
 
-          final Iterator<Object> keyGroupIterator = (Iterator<Object>) src.next().getValue();
+          final Iterator<Object> keyGroupIterator = (Iterator<Object>) src.currentValue();
           if(emitKeyGroup) {
             acceptKeyGroup = AcceptKeyGroup.ACCEPT;
             // data must be materialized (eagerly evaluated) if requested or if there is a predicate

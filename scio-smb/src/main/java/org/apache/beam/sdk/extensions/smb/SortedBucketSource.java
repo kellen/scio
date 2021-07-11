@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
@@ -314,28 +315,11 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
         true);
   }
 
-  // TODO refactor this so that the common functionality is shared rather than embedded in a static class
   /** Merge key-value groups in matching buckets. */
   static class MergeBucketsReader<FinalKeyT> extends BoundedReader<KV<FinalKeyT, CoGbkResult>> {
-    private static final Comparator<Map.Entry<TupleTag, KV<byte[], Iterator<?>>>> keyComparator =
-        (o1, o2) -> bytesComparator.compare(o1.getValue().getKey(), o2.getValue().getKey());
-
-    private final Coder<FinalKeyT> keyCoder;
     private final SortedBucketSource<FinalKeyT> currentSource;
-    private final Distribution keyGroupSize;
-    private final int numSources;
-    private final int parallelism;
-    private final KeyGroupIterator[] iterators;
-    private final Function<byte[], Boolean> keyGroupFilter;
-    private final Predicate[] predicates;
-    private final CoGbkResultSchema resultSchema;
-    private final TupleTagList tupleTags;
-    private final Map<TupleTag, Integer> bucketsPerSource;
-
-    private KV<byte[], CoGbkResult> next;
-    private Map<TupleTag, KV<byte[], Iterator<?>>> nextKeyGroups;
-    private boolean materializeKeyGroup;
-    private int runningKeyGroupSize;
+    private final MultiSourceKeyGroupReader<FinalKeyT> iter;
+    private Optional<KV<FinalKeyT, CoGbkResult>> next = null;
 
     MergeBucketsReader(
         PipelineOptions options,
@@ -346,180 +330,27 @@ public class SortedBucketSource<FinalKeyT> extends BoundedSource<KV<FinalKeyT, C
         SortedBucketSource<FinalKeyT> currentSource,
         Distribution keyGroupSize,
         boolean materializeKeyGroup) {
-      this.keyCoder = sourceSpec.keyCoder;
-      this.numSources = sources.size();
       this.currentSource = currentSource;
-      this.keyGroupSize = keyGroupSize;
-      this.parallelism = parallelism;
-      this.materializeKeyGroup = materializeKeyGroup;
-      this.runningKeyGroupSize = 0;
-
-      this.keyGroupFilter =
-          (bytes) -> sources.get(0).getMetadata().rehashBucket(bytes, parallelism) == bucketId;
-
-      predicates = sources.stream().map(i -> i.predicate).toArray(Predicate[]::new);
-
-      iterators =
-          sources.stream()
-              .map(i -> i.createIterator(bucketId, parallelism, options))
-              .toArray(KeyGroupIterator[]::new);
-
-      resultSchema = BucketedInput.schemaOf(sources);
-      tupleTags = resultSchema.getTupleTagList();
-
-      this.bucketsPerSource =
-          sources.stream()
-              .collect(
-                  Collectors.toMap(
-                      BucketedInput::getTupleTag,
-                      i -> i.getOrComputeMetadata().getCanonicalMetadata().getNumBuckets()));
+      this.iter = new MultiSourceKeyGroupReader<>(sources, sourceSpec, keyGroupSize, materializeKeyGroup, bucketId, parallelism, options);
     }
 
     @Override
     public boolean start() throws IOException {
-      nextKeyGroups = new HashMap<>();
       return advance();
     }
 
     @Override
     public KV<FinalKeyT, CoGbkResult> getCurrent() throws NoSuchElementException {
-      try {
-        return KV.of(keyCoder.decode(new ByteArrayInputStream(next.getKey())), next.getValue());
-      } catch (Exception e) {
-        throw new RuntimeException("Failed to decode key group", e);
-      }
+      if(next == null) throw new IllegalStateException("Call MergeBucketsReader.start() before MergeBucketsReader.getCurrent()");
+      if(next.isPresent()) return next.get();
+      throw new NoSuchElementException();
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public boolean advance() throws IOException {
-      while (true) {
-        // once a keygroup has been fully read, update the distribution metrics
-        // if runningKeyGroupSize is 0, we haven't started reading yet
-        if (runningKeyGroupSize != 0) {
-          keyGroupSize.update(runningKeyGroupSize);
-          runningKeyGroupSize = 0;
-        }
-
-        // Advance key-value groups from each source
-        // for each source, add its tupleTag and data iterator to nextKeyGroups
-        // _if_ that tupleTag hasn't already been added _and_ there's data in the iterator
-        int completedSources = 0;
-        for (int i = 0; i < numSources; i++) {
-          // if the tupletag is already recorded, skip this source
-          if (nextKeyGroups.containsKey(tupleTags.get(i))) {
-            continue;
-          }
-          // get the associated iterator
-          final KeyGroupIterator it = iterators[i];
-          if (it.hasNext()) {
-            // if there's a key group in the  iterator, put it in nextKeyGroups for processing
-            final KV<byte[], Iterator<?>> next = it.next();
-            nextKeyGroups.put(tupleTags.get(i), next);
-          } else {
-            // otherwise this source is exhausted, so update the counter
-            completedSources++;
-          }
-        }
-
-        // if there's nothing in nextKeyGroups, we're all done and will return false
-        if (nextKeyGroups.isEmpty()) {
-          break;
-        }
-
-        // Find next key-value groups
-        // gets the "first" key
-        final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> minKeyEntry = nextKeyGroups.entrySet().stream().min(keyComparator).orElse(null);
-
-        final List<Iterable<?>> valueMap = new ArrayList<>();
-        for (int i = 0; i < resultSchema.size(); i++) {
-          valueMap.add(new ArrayList<>());
-        }
-
-        // Set to 1 if subsequent key groups should be accepted or 0 if they should be filtered out
-        int acceptKeyGroup = -1;
-
-        // for each entry in the key groups
-        final Iterator<Map.Entry<TupleTag, KV<byte[], Iterator<?>>>> nextKeyGroupsIt = nextKeyGroups.entrySet().iterator();
-        while (nextKeyGroupsIt.hasNext()) {
-          final Map.Entry<TupleTag, KV<byte[], Iterator<?>>> entry = nextKeyGroupsIt.next();
-
-          // if this entry is for the current-min key
-          if (keyComparator.compare(entry, minKeyEntry) == 0) {
-            final TupleTag tupleTag = entry.getKey();
-            int index = resultSchema.getIndex(tupleTag);
-
-            // on each iteration, acceptKeyGroup may already be set.
-            // if it's set to -1 (the initial value),
-            //    and the key matches the filter, we emit this key group
-            //    and the # of buckets for this source >= parallelism, we emit this key group
-            // if it's set to 1 from a previous iteration, we emit this key group
-            // if it's set to 0 from a previous iteration, we don't emit, but exhaust the iterator later
-
-            // Track the canonical # buckets of each source that the key is found in.
-            // If we find it in a source with a # buckets >= the parallelism of the job,
-            // we know that it doesn't need to be re-hashed as it's already in the right bucket.
-            final boolean emitKeyGroup =
-                acceptKeyGroup == 1
-                    || (acceptKeyGroup != 0 // make sure it hasn't already been ruled out
-                        && (bucketsPerSource.get(tupleTag) >= parallelism
-                            || keyGroupFilter.apply(minKeyEntry.getValue().getKey())));
-
-            // If the user supplies a predicate, we have to materialize the iterable to apply it
-            boolean materialize = (materializeKeyGroup || predicates[index] != null);
-            // define a default no-op predicate when unsupplied
-            final Predicate<Object> predicate = predicates[index] != null ? predicates[index] : (xs, x) -> true;
-            // get the data iterator for this key group
-            final Iterator<Object> keyGroupIterator = (Iterator<Object>) entry.getValue().getValue();
-
-            if (emitKeyGroup && !materialize) {
-              // don't eagerly materialize this iterator
-              valueMap.set(
-                  index,
-                  new TraversableOnceIterable<>(
-                      Iterators.transform(
-                          keyGroupIterator,
-                          (value) -> {
-                            runningKeyGroupSize++;
-                            return value;
-                          })));
-              acceptKeyGroup = 1;
-            } else if (emitKeyGroup) {
-              // eagerly materialize this iterator into `List<Object>`
-              // by applying the predicate to each value
-              final List<Object> values = (List<Object>) valueMap.get(index);
-              keyGroupIterator.forEachRemaining(
-                  v -> {
-                    if (predicate.apply(values, v)) {
-                      values.add(v);
-                      runningKeyGroupSize++;
-                    }
-                  });
-              acceptKeyGroup = 1;
-            } else {
-              // skip key but still have to exhaust iterator
-              keyGroupIterator.forEachRemaining(value -> {});
-              acceptKeyGroup = 0;
-            }
-
-            nextKeyGroupsIt.remove();
-          }
-        }
-
-        if (acceptKeyGroup == 1) {
-          next =
-              KV.of(
-                  minKeyEntry.getValue().getKey(),
-                  CoGbkResultUtil.newCoGbkResult(resultSchema, valueMap));
-          return true;
-        } else {
-          //  we have consumed all sources, so cannot advance more. break & return false
-          if (completedSources == numSources) {
-            break;
-          }
-        }
-      }
-      return false;
+      next = iter.readNext();
+      return next.isPresent();
     }
 
     @Override

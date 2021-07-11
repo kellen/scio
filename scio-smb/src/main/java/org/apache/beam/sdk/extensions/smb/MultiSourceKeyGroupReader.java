@@ -33,8 +33,8 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
 
   private int runningKeyGroupSize = 0;
   private final Distribution keyGroupSize;
-  boolean materializeKeyGroup;
-  private Comparator<byte[]> bytesComparator = UnsignedBytes.lexicographicalComparator();
+  private final boolean materializeKeyGroup;
+  private final Comparator<byte[]> bytesComparator = UnsignedBytes.lexicographicalComparator();
 
   private final CoGbkResultSchema resultSchema;
   private final List<BucketedInputSource<?, ?>> bucketedInputs;
@@ -121,7 +121,7 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
           if(emitKeyGroup) {
             acceptKeyGroup = AcceptKeyGroup.ACCEPT;
             // data must be eagerly materialized if requested or if there is a predicate
-            boolean materialize = materializeKeyGroup || src.hasPredicate();
+            boolean materialize = materializeKeyGroup || src.predicate.isPresent();
             int outputIndex = resultSchema.getIndex(src.tupleTag);
 
             if(!materialize) {
@@ -142,8 +142,11 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
               // eagerly materialize this iterator and apply the predicate to each value
               // this must be eager because the predicate can operate on the entire collection
               final List<Object> values = (List<Object>) valueMap.get(outputIndex);
+              final SortedBucketSource.Predicate<Object> predicate= src.predicate
+                  .map(value -> (SortedBucketSource.Predicate<Object>) value)
+                  .orElseGet(() -> (xs, x) -> true);
               keyGroupIterator.forEachRemaining(v -> {
-                if (((SortedBucketSource.Predicate<Object>) src.predicate).apply(values, v)) {
+                if ((predicate).apply(values, v)) {
                   values.add(v);
                   runningKeyGroupSize++;
                 }
@@ -175,7 +178,7 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
     public final boolean emitByDefault;
 
     private final KeyGroupIterator<byte[], V> iter;
-    final SortedBucketSource.Predicate<V> predicate;
+    final Optional<SortedBucketSource.Predicate<V>> predicate;
     private Optional<KV<byte[], Iterator<V>>> head;
 
     public BucketedInputSource(
@@ -184,7 +187,7 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
         int parallelism,
         PipelineOptions options
     ) {
-      this.predicate = source.getPredicate();
+      this.predicate = Optional.ofNullable(source.getPredicate());
       this.tupleTag = source.getTupleTag();
       this.iter = source.createIterator(bucketId, parallelism, options);
 
@@ -194,10 +197,6 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
       this.emitByDefault = numBuckets >= parallelism;
 
       advance();
-    }
-
-    public boolean hasPredicate() {
-      return this.predicate != null;
     }
 
     public byte[] currentKey() {

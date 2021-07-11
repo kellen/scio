@@ -422,8 +422,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
           // for example, if not every element was needed in the transformFn
           sources.forEach(source -> {
             final Iterable<?> maybeUnfinishedIt = mergedKeyGroup.getValue().getAll(source.getTupleTag());
-            if (SortedBucketSource.TraversableOnceIterable.class.isAssignableFrom(
-                maybeUnfinishedIt.getClass())) {
+            if (SortedBucketSource.TraversableOnceIterable.class.isAssignableFrom(maybeUnfinishedIt.getClass())) {
               ((SortedBucketSource.TraversableOnceIterable<?>) maybeUnfinishedIt).ensureExhausted();
             }
           });

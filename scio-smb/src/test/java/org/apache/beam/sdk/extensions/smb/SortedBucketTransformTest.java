@@ -73,8 +73,11 @@ public class SortedBucketTransformTest {
 
   private static final List<String> inputLhs = ImmutableList.of("", "a1", "b1", "c1", "d1", "e1");
   private static final List<String> inputRhs = ImmutableList.of("", "c2", "d2", "e2", "f2", "g2");
+  private static final List<Integer> inputSI = ImmutableList.of(1, 2, 3, 4, 5, 6);
+
   // Predicate will filter out c2 from RHS input
   private static final Set<String> expected = ImmutableSet.of("d1-d2", "e1-e2");
+  private static final Set<String> expectedWithSides = ImmutableSet.of("d1-d2-1,2,3,4,5,6", "e1-e2-1,2,3,4,5,6");
 
   private static List<BucketedInput<?, ?>> sources;
   static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransformTest.class);
@@ -156,6 +159,61 @@ public class SortedBucketTransformTest {
     test(TargetParallelism.of(8), 8);
   }
 
+  @Test
+  public void testSortedBucketWithSidesTransformMinParallelism() throws Exception {
+    testWithSides(TargetParallelism.min(), 2);
+  }
+
+  @Test
+  public void testSortedBucketWithSidesTransformMaxParallelism() throws Exception {
+    testWithSides(TargetParallelism.max(), 4);
+  }
+
+  @Test
+  public void testSortedBucketWithSidesTransformAutoParallelism() throws Exception {
+    testWithSides(TargetParallelism.auto(), -1);
+  }
+
+  @Test
+  public void testSortedBucketWithSidesTransformCustomParallelism() throws Exception {
+    testWithSides(TargetParallelism.of(8), 8);
+  }
+
+  private void testWithSides(TargetParallelism targetParallelism, int expectedNumBuckets) throws Exception {
+    final PCollectionView<List<Integer>> ints = transformPipeline.apply("CreateSI", Create.of(inputSI)).apply(View.asList());
+    final SortedBucketTransform.TransformFnWithSideInputContext<String, String> sideMergeFunction =
+        (keyGroup, ctx, outputConsumer, window) -> {
+          List<String> si = ctx.sideInput(ints).stream().map(i -> i.toString()).collect(Collectors.toList());
+          Collections.sort(si);
+          final String integers = String.join(",", si);
+          keyGroup
+              .getValue()
+              .getAll(new TupleTag<String>("lhs"))
+              .forEach(lhs ->
+                  keyGroup
+                      .getValue()
+                      .getAll(new TupleTag<String>("rhs"))
+                      .forEach(rhs -> outputConsumer.accept(lhs + "-" + rhs + "-" + integers))
+              );
+        };
+
+    transformPipeline.apply(
+        new SortedBucketTransform<>(
+            String.class,
+            sources,
+            targetParallelism,
+            null,
+            sideMergeFunction,
+            fromFolder(outputFolder),
+            fromFolder(tempFolder),
+            Collections.singletonList(ints),
+            (numBuckets, numShards, hashType) -> TestBucketMetadata.of(numBuckets, numShards),
+            new TestFileOperations(),
+            ".txt",
+            SortedBucketIO.DEFAULT_FILENAME_PREFIX));
+    runAndValidate(targetParallelism, expectedNumBuckets, expectedWithSides);
+  }
+
   private void test(TargetParallelism targetParallelism, int expectedNumBuckets) throws Exception {
     transformPipeline.apply(
         new SortedBucketTransform<>(
@@ -171,12 +229,14 @@ public class SortedBucketTransformTest {
             new TestFileOperations(),
             ".txt",
             SortedBucketIO.DEFAULT_FILENAME_PREFIX));
+    runAndValidate(targetParallelism, expectedNumBuckets, expected);
+  }
 
+  private void runAndValidate(TargetParallelism targetParallelism, int expectedNumBuckets, Set<String> expected) throws Exception {
     final PipelineResult result = transformPipeline.run();
     result.waitUntilFinish();
 
-    final KV<TestBucketMetadata, Map<BucketShardId, List<String>>> outputs =
-        readAllFrom(outputFolder);
+    final KV<TestBucketMetadata, Map<BucketShardId, List<String>>> outputs = readAllFrom(outputFolder);
     int numBucketsInMetadata = outputs.getKey().getNumBuckets();
 
     if (!targetParallelism.isAuto()) {
@@ -186,8 +246,7 @@ public class SortedBucketTransformTest {
       Assert.assertTrue(numBucketsInMetadata >= 1);
     }
 
-    SortedBucketSinkTest.assertValidSmbFormat(outputs.getKey(), expected.toArray(new String[0]))
-        .accept(outputs.getValue());
+    SortedBucketSinkTest.assertValidSmbFormat(outputs.getKey(), expected.toArray(new String[0])).accept(outputs.getValue());
 
     Assert.assertEquals(1, outputs.getKey().getNumShards());
 
@@ -199,36 +258,23 @@ public class SortedBucketTransformTest {
 
   private static KV<TestBucketMetadata, Map<BucketShardId, List<String>>> readAllFrom(
       TemporaryFolder folder) throws Exception {
-    final FileAssignment fileAssignment =
-        new SMBFilenamePolicy(fromFolder(folder), SortedBucketIO.DEFAULT_FILENAME_PREFIX, ".txt")
-            .forDestination();
-
-    BucketMetadata<String, String> metadata =
-        BucketMetadata.from(
-            Channels.newInputStream(FileSystems.open(fileAssignment.forMetadata())));
-
+    final FileAssignment fileAssignment = new SMBFilenamePolicy(fromFolder(folder), SortedBucketIO.DEFAULT_FILENAME_PREFIX, ".txt").forDestination();
+    BucketMetadata<String, String> metadata = BucketMetadata.from(Channels.newInputStream(FileSystems.open(fileAssignment.forMetadata())));
     final Map<BucketShardId, List<String>> bucketsToOutputs = new HashMap<>();
 
     for (BucketShardId bucketShardId : metadata.getAllBucketShardIds()) {
       final FileOperations.Reader<String> outputReader = new TestFileOperations().createReader();
-      final ResourceId resourceId = fileAssignment.forBucket(
-          BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()),
-          metadata);
-      outputReader.prepareRead(
-          FileSystems.open(resourceId
-              ));
-
+      final ResourceId resourceId = fileAssignment.forBucket(BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()), metadata);
+      outputReader.prepareRead(FileSystems.open(resourceId));
       final ArrayList<String> lines = Lists.newArrayList(outputReader.iterator());
-      bucketsToOutputs.put(
-          BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()),
-          lines);
+      bucketsToOutputs.put(BucketShardId.of(bucketShardId.getBucketId(), bucketShardId.getShardId()), lines);
     }
 
     Assert.assertSame(
         "Found unexpected null-key bucket written in SortedBucketTransform output",
-        FileSystems.match(fileAssignment.forNullKeys().toString(), EmptyMatchTreatment.DISALLOW)
-            .status(),
-        Status.NOT_FOUND);
+        FileSystems.match(fileAssignment.forNullKeys().toString(), EmptyMatchTreatment.DISALLOW).status(),
+        Status.NOT_FOUND
+    );
 
     return KV.of((TestBucketMetadata) metadata, bucketsToOutputs);
   }

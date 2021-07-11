@@ -40,8 +40,6 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
   private final List<BucketedInputSource<?, ?>> bucketedInputs;
   private final Function<byte[], Boolean> keyGroupFilter;
 
-  // TODO remvoe
- final   int bucketId;
   public MultiSourceKeyGroupReader(
       List<SortedBucketSource.BucketedInput<?, ?>> sources,
        SourceSpec<FinalKeyT> sourceSpec,
@@ -51,7 +49,6 @@ public class MultiSourceKeyGroupReader<FinalKeyT> {
       int effectiveParallelism,
       PipelineOptions options
   ) {
-    this.bucketId = bucketId;
     this.keyCoder = sourceSpec.keyCoder;
     this.keyGroupSize = keyGroupSize;
     this.materializeKeyGroup = materializeKeyGroup;

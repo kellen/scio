@@ -99,6 +99,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     // TODO make this impossible by construction
     assert !((transformFn == null) && (sideInputTransformFn == null)); // at least one defined
     assert !((transformFn != null) && (sideInputTransformFn != null)); // only one defined
+    assert sides == null || (sideInputTransformFn != null);
 
     final SMBFilenamePolicy filenamePolicy = new SMBFilenamePolicy(outputDirectory, filenamePrefix, filenameSuffix);
     final SourceSpec<FinalKeyT> sourceSpec = SourceSpec.from(finalKeyClass, sources);
@@ -146,7 +147,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
   public interface TransformFnWithSideInputContext<KeyT, ValueT> extends Serializable {
     void writeTransform(
         KV<KeyT, CoGbkResult> keyGroup,
-        DoFn<BucketItem, MergedBucket>.ProcessContext c,
+        DoFn<?, ?>.ProcessContext c,
         SerializableConsumer<ValueT> outputConsumer,
         BoundedWindow window
     );

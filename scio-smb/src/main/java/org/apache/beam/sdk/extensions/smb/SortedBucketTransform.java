@@ -147,7 +147,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
   public interface TransformFnWithSideInputContext<KeyT, ValueT> extends Serializable {
     void writeTransform(
         KV<KeyT, CoGbkResult> keyGroup,
-        DoFn<?, ?>.ProcessContext c,
+        DoFn<BucketItem, MergedBucket>.ProcessContext c,
         SerializableConsumer<ValueT> outputConsumer,
         BoundedWindow window
     );
@@ -237,7 +237,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     }
   }
 
-  private static class MergedBucket implements Serializable {
+  public static class MergedBucket implements Serializable {
     final ResourceId destination;
     final int bucketId;
     final int totalNumBuckets;
@@ -534,7 +534,7 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
     }
   }
 
-  private static class BucketItem implements Serializable {
+  public static class BucketItem implements Serializable {
     final int bucketOffsetId;
     final int effectiveParallelism;
 

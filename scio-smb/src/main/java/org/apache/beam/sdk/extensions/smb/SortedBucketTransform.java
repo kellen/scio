@@ -85,7 +85,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
       Class<FinalKeyT> finalKeyClass,
       List<SortedBucketSource.BucketedInput<?, ?>> sources,
       TargetParallelism targetParallelism,
-      // TODO some better way to do this e.g. a builder
       TransformFn<FinalKeyT, FinalValueT> transformFn,
       TransformFnWithSideInputContext<FinalKeyT, FinalValueT> sideInputTransformFn,
       ResourceId outputDirectory,
@@ -96,7 +95,6 @@ public class SortedBucketTransform<FinalKeyT, FinalValueT> extends PTransform<PB
       String filenameSuffix,
       String filenamePrefix
   ) {
-    // TODO make this impossible by construction
     assert !((transformFn == null) && (sideInputTransformFn == null)); // at least one defined
     assert !((transformFn != null) && (sideInputTransformFn != null)); // only one defined
     assert sides == null || (sideInputTransformFn != null);

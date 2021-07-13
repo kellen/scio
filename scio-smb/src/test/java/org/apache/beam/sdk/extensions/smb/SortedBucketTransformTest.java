@@ -74,10 +74,11 @@ public class SortedBucketTransformTest {
   private static final List<String> inputLhs = ImmutableList.of("", "a1", "b1", "c1", "d1", "e1");
   private static final List<String> inputRhs = ImmutableList.of("", "c2", "d2", "e2", "f2", "g2");
   private static final List<Integer> inputSI = ImmutableList.of(1, 2, 3, 4, 5, 6);
+  private static final List<String> inputSI2 = ImmutableList.of("z", "x", "y");
 
   // Predicate will filter out c2 from RHS input
   private static final Set<String> expected = ImmutableSet.of("d1-d2", "e1-e2");
-  private static final Set<String> expectedWithSides = ImmutableSet.of("d1-d2-1,2,3,4,5,6", "e1-e2-1,2,3,4,5,6");
+  private static final Set<String> expectedWithSides = ImmutableSet.of("d1-d2-1,2,3,4,5,6-x,y,z", "e1-e2-1,2,3,4,5,6-x,y,z");
 
   private static List<BucketedInput<?, ?>> sources;
   static final Logger LOG = LoggerFactory.getLogger(SortedBucketTransformTest.class);
@@ -180,12 +181,17 @@ public class SortedBucketTransformTest {
   }
 
   private void testWithSides(TargetParallelism targetParallelism, int expectedNumBuckets) throws Exception {
-    final PCollectionView<List<Integer>> ints = transformPipeline.apply("CreateSI", Create.of(inputSI)).apply(View.asList());
+    final PCollectionView<List<Integer>> ints = transformPipeline.apply("CreateSI", Create.of(inputSI)).apply("SI", View.asList());
+    final PCollectionView<List<String>> chars = transformPipeline.apply("CreateSI2", Create.of(inputSI2)).apply("SI1", View.asList());
+
     final SortedBucketTransform.TransformFnWithSideInputContext<String, String> sideMergeFunction =
         (keyGroup, ctx, outputConsumer, window) -> {
           List<String> si = ctx.sideInput(ints).stream().map(i -> i.toString()).collect(Collectors.toList());
+          List<String> si2 = ctx.sideInput(chars).stream().collect(Collectors.toList());
           Collections.sort(si);
+          Collections.sort(si2);
           final String integers = String.join(",", si);
+          final String characters = String.join(",", si2);
           keyGroup
               .getValue()
               .getAll(new TupleTag<String>("lhs"))
@@ -193,7 +199,7 @@ public class SortedBucketTransformTest {
                   keyGroup
                       .getValue()
                       .getAll(new TupleTag<String>("rhs"))
-                      .forEach(rhs -> outputConsumer.accept(lhs + "-" + rhs + "-" + integers))
+                      .forEach(rhs -> outputConsumer.accept(lhs + "-" + rhs + "-" + integers + "-" + characters))
               );
         };
 
@@ -206,7 +212,7 @@ public class SortedBucketTransformTest {
             sideMergeFunction,
             fromFolder(outputFolder),
             fromFolder(tempFolder),
-            Collections.singletonList(ints),
+            Arrays.asList(ints, chars),
             (numBuckets, numShards, hashType) -> TestBucketMetadata.of(numBuckets, numShards),
             new TestFileOperations(),
             ".txt",
